@@ -77,9 +77,12 @@ async def pub_(bot, message):
           is_continuous = getattr(sts, 'continuous', False)
 
           # --- Strictly Ordered Pipelined Setup ---
-          MAX_WORKERS = 5
-          task_queue = asyncio.Queue(maxsize=10) 
-          upload_queue = asyncio.Queue(maxsize=15) 
+          # Workers are only needed for DOWNLOAD mode (large file transfers).
+          # For simple copy_message / send_cached_media, we bypass the pipeline
+          # and send directly + sequentially to guarantee correct ordering.
+          MAX_WORKERS = 1  # Reduced to 1: file downloads are sequential, no race conditions
+          task_queue = asyncio.Queue(maxsize=5) 
+          upload_queue = asyncio.Queue(maxsize=5) 
 
           async def copy_worker():
               while True:
@@ -192,7 +195,7 @@ async def pub_(bot, message):
               
               if smart_order:
                   # Sort the collected window strictly by Telegram message ID
-                  # e.g. source sends [42, 43, 45, 44, 46] → buffer sorts to [42, 43, 44, 45, 46]
+                  # e.g. source sends [42, 43, 45, 44, 46] → sorts to [42, 43, 44, 45, 46]
                   sort_buffer.sort(key=lambda item: item[0].id)
               
               for message, forward_tag, new_caption, protect, download_mode, sleep in sort_buffer:
@@ -208,9 +211,58 @@ async def pub_(bot, message):
                         await asyncio.sleep(10)
                         MSG.clear()
                   else:
+                      # DIRECT SEQUENTIAL SEND — bypass the concurrent pipeline entirely
+                      # This is the ONLY way to guarantee ordering for copy_message.
+                      # The pipeline approach (task_queue + workers) inherently races
+                      # even with a sequence-buffer in the uploader.
                       details = {"msg_id": message.id, "media": media(message), "caption": new_caption, 'button': button, "protect": protect, "text": message.text.html if message.text else ""}
-                      await task_queue.put((seq_counter, client, details, m, sts, download_mode, 0))
-                      seq_counter += 1
+                      
+                      if download_mode:
+                          # Download mode: use the worker pipeline (slow, benefits from async)
+                          await task_queue.put((seq_counter, client, details, m, sts, download_mode, 0))
+                          seq_counter += 1
+                      else:
+                          # Non-download mode: SEND DIRECTLY, skip the pipeline completely
+                          try:
+                              await copy(client, details, m, sts, False, 0, seq_counter, upload_queue)
+                              # For direct sending, drain the upload_queue immediately after each copy
+                              while not upload_queue.empty():
+                                  ui = upload_queue.get_nowait()
+                                  if ui is None: break
+                                  _, act, prm, fpath = ui
+                                  if act != 'skip':
+                                      try:
+                                          if act == 'send_photo': await client.send_photo(**prm)
+                                          elif act == 'send_video': await client.send_video(**prm)
+                                          elif act == 'send_document': await client.send_document(**prm)
+                                          elif act == 'send_audio': await client.send_audio(**prm)
+                                          elif act == 'send_voice': await client.send_voice(**prm)
+                                          elif act == 'send_video_note': await client.send_video_note(**prm)
+                                          elif act == 'send_animation': await client.send_animation(**prm)
+                                          elif act == 'send_sticker': await client.send_sticker(**prm)
+                                          elif act == 'copy_message': await client.copy_message(**prm)
+                                          elif act == 'send_cached_media': await client.send_cached_media(**prm)
+                                          elif act == 'send_message': await client.send_message(**prm)
+                                          sts.add('total_files')
+                                      except FloodWait as fw:
+                                          await asyncio.sleep(fw.value + 2)
+                                          try:
+                                              if act == 'copy_message': await client.copy_message(**prm)
+                                              sts.add('total_files')
+                                          except Exception: sts.add('deleted')
+                                      except Exception as e:
+                                          print(f"Direct send error: {e}")
+                                          sts.add('deleted')
+                                  if fpath:
+                                      try:
+                                          import os
+                                          if os.path.exists(fpath): os.remove(fpath)
+                                      except: pass
+                              seq_counter += 1
+                          except Exception as e:
+                              print(f"Direct copy error: {e}")
+                              sts.add('deleted')
+                              seq_counter += 1
                       
                       if sleep > 0:
                           await asyncio.sleep(sleep)
