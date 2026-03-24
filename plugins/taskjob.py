@@ -644,12 +644,6 @@ async def tj_del_cb(bot, query):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _create_taskjob_flow(bot, user_id: int):
-    # Clear any stale listeners left from a previous interrupted flow
-    try:
-        bot.stop_listening(user_id)
-    except Exception:
-        pass
-
     # ── Step 1: Account ─────────────────────────────────────────────────────
     accounts = await db.get_bots(user_id)
     if not accounts:
