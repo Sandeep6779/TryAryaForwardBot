@@ -131,16 +131,84 @@ async def about(bot, query):
         parse_mode=enums.ParseMode.HTML,
     )
 
+def humanbytes(size):
+    if not size: return "0 B"
+    for unit in ["B", "KB", "MB", "GB", "TB"]:
+        if size < 1024.0: break
+        size /= 1024.0
+    return f"{size:.2f} {unit}"
+
+def get_readable_time(seconds: int) -> str:
+    count = 0
+    ping_time = ""
+    time_list = []
+    time_suffix_list = ["s", "m", "h", "days"]
+    while count < 4:
+        count += 1
+        curr_time = seconds % 60
+        time_list.append(int(curr_time))
+        seconds = int(seconds / 60)
+        if seconds == 0: break
+    for x in range(len(time_list)):
+        time_list[x] = str(time_list[x]) + time_suffix_list[x]
+    if len(time_list) == 4:
+        ping_time += time_list.pop() + " "
+    time_list.reverse()
+    ping_time += ":".join(time_list)
+    return ping_time
+
 @Client.on_callback_query(filters.regex(r'^status'))
 async def status(bot, query):
+    import psutil, time, asyncio
     user_id = query.from_user.id
     lang = await db.get_language(user_id)
+    
+    # Send a quick response to clear spinning wheel while computing speed
+    await query.answer()
+    
     users_count, bots_count = await db.total_users_bots_count()
     total_channels = await db.total_channels()
+    
+    # Calculate real-time speed in one second
+    old_net = psutil.net_io_counters()
+    await asyncio.sleep(1)
+    new_net = psutil.net_io_counters()
+    dl_speed = humanbytes(new_net.bytes_recv - old_net.bytes_recv) + "/s"
+    ul_speed = humanbytes(new_net.bytes_sent - old_net.bytes_sent) + "/s"
+    
+    stats = await db.get_global_stats()
+    live_fwd = stats.get('live_forward', 0)
+    batch_fwd = stats.get('batch_forward', 0)
+    normal_fwd = stats.get('normal_forward', 0)
+    total_fwd = live_fwd + batch_fwd + normal_fwd
+    
+    dl_files = stats.get('total_files_downloaded', 0)
+    ul_files = stats.get('total_files_uploaded', 0)
+    data_usage = humanbytes(stats.get('total_data_usage_bytes', 0))
+    
+    uptime = get_readable_time(int(time.time() - stats.get('bot_start_time', time.time())))
+    
+    kwargs = {
+        'users_count': users_count,
+        'bots_count': bots_count,
+        'total_channels': total_channels,
+        'banned_users': temp.BANNED_USERS,
+        'current_forwards': temp.forwardings,
+        'live_forward': live_fwd,
+        'batch_forward': batch_fwd,
+        'normal_forward': normal_fwd,
+        'total_forward': total_fwd,
+        'total_files_downloaded': dl_files,
+        'total_files_uploaded': ul_files,
+        'total_data_usage_bytes': data_usage,
+        'dl_speed': dl_speed,
+        'ul_speed': ul_speed,
+        'uptime': uptime
+    }
+
     await query.message.edit_text(
-        text=_tx(lang, 'STATUS_TXT',
-                 users_count, bots_count, temp.forwardings, total_channels, temp.BANNED_USERS),
-        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('↩ Back', callback_data='back')]]),
+        text=_tx(lang, 'STATUS_TXT', **kwargs),
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('↩ Bᴀᴄᴋ', callback_data='back')]]),
         parse_mode=enums.ParseMode.HTML,
         disable_web_page_preview=True,
     )
@@ -148,6 +216,11 @@ async def status(bot, query):
 # ══════════════════════════════════════════════════════════════════════════════
 # /stats  — Owner only: detailed bot statistics
 # ══════════════════════════════════════════════════════════════════════════════
+
+@Client.on_message(filters.private & filters.command("resetstats") & filters.user(Config.BOT_OWNER_ID))
+async def reset_stats(bot, message):
+    await db.reset_global_stats()
+    await message.reply_text("✅ Global Stats successfully reset.")
 
 @Client.on_message(filters.private & filters.command("stats") & filters.user(Config.BOT_OWNER_ID))
 async def owner_stats(bot, message):

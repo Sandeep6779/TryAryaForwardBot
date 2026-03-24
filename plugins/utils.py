@@ -32,6 +32,9 @@ class STS:
         if time:
           return self.data[self.id].update({'start': tm.time()})
         self.data[self.id].update({key: self.get(key) + value}) 
+        if key == 'total_files':
+            import asyncio
+            asyncio.create_task(db.update_global_stats(normal_forward=value)) 
     
     def divide(self, no, by):
        by = 1 if int(by) == 0 else by 

@@ -155,12 +155,21 @@ async def pub_(bot, message):
                                       if fallback_msg.media:
                                           safe_name = f"downloads/{fallback_msg.id}"
                                           dp = await client.download_media(fallback_msg, file_name=safe_name)
+                                          
+                                          file_size = 0
+                                          if dp and os.path.exists(dp):
+                                              file_size = os.path.getsize(dp)
+                                              asyncio.create_task(db.update_global_stats(total_files_downloaded=1))
+                                              
                                           if getattr(fallback_msg, 'photo', None): await client.send_photo(chat_id=prm.get('chat_id'), photo=dp, caption=prm.get('caption'))
                                           elif getattr(fallback_msg, 'video', None): await client.send_video(chat_id=prm.get('chat_id'), video=dp, caption=prm.get('caption'))
                                           elif getattr(fallback_msg, 'document', None): await client.send_document(chat_id=prm.get('chat_id'), document=dp, caption=prm.get('caption'))
                                           elif getattr(fallback_msg, 'audio', None): await client.send_audio(chat_id=prm.get('chat_id'), audio=dp, caption=prm.get('caption'))
                                           elif getattr(fallback_msg, 'voice', None): await client.send_voice(chat_id=prm.get('chat_id'), voice=dp, caption=prm.get('caption'))
-                                          if os.path.exists(dp): os.remove(dp)
+                                          
+                                          if dp and os.path.exists(dp):
+                                              asyncio.create_task(db.update_global_stats(total_files_uploaded=1))
+                                              os.remove(dp)
                                       else:
                                           await client.send_message(chat_id=prm.get('chat_id'), text=fallback_msg.text.html if fallback_msg.text else "")
                                       sts.add('total_files')

@@ -24,6 +24,41 @@ class Database:
         self.col = self.db.users
         self.nfy = self.db.notify
         self.chl = self.db.channels
+        self.stats = self.db.global_stats
+        
+    async def get_global_stats(self):
+        import time
+        doc = await self.stats.find_one({'_id': 'bot_stats'})
+        if not doc:
+            doc = {
+                '_id': 'bot_stats',
+                'live_forward': 0,
+                'batch_forward': 0,
+                'normal_forward': 0,
+                'total_files_downloaded': 0,
+                'total_files_uploaded': 0,
+                'total_data_usage_bytes': 0,
+                'bot_start_time': time.time()
+            }
+            await self.stats.insert_one(doc)
+        return doc
+        
+    async def update_global_stats(self, **kwargs):
+        """Pass fields to update as keyword arguments, e.g. update_global_stats(live_forward=1)"""
+        if not kwargs: return
+        await self.stats.update_one({'_id': 'bot_stats'}, {'$inc': kwargs}, upsert=True)
+        
+    async def reset_global_stats(self):
+        import time
+        await self.stats.update_one({'_id': 'bot_stats'}, {'$set': {
+            'live_forward': 0,
+            'batch_forward': 0,
+            'normal_forward': 0,
+            'total_files_downloaded': 0,
+            'total_files_uploaded': 0,
+            'total_data_usage_bytes': 0,
+            'bot_start_time': time.time()
+        }}, upsert=True)
         
     def new_user(self, id, name):
         return dict(
