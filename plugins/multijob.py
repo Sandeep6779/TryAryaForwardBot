@@ -128,7 +128,7 @@ def _passes_filters(msg, disabled_types: list) -> bool:
 
 async def _mj_forward(
     client, msg,
-    to_chat: int, remove_caption: bool, cap_tpl: str | None,
+    to_chat: int, remove_caption: bool, cap_tpl: str | None, forward_tag: bool = False,
     thread_id: int = None,
     to_chat_2: int = None, thread_id_2: int = None
 ):
@@ -147,18 +147,54 @@ async def _mj_forward(
             kw["caption"] = new_caption
 
         try:
-            await client.copy_message(
-                chat_id=chat, from_chat_id=msg.chat.id,
-                message_id=msg.id, **kw
-            )
-        except Exception:
-            try:
+            if forward_tag:
                 await client.forward_messages(
                     chat_id=chat, from_chat_id=msg.chat.id,
                     message_ids=msg.id, **kw
                 )
-            except Exception as e:
-                logger.debug(f"[MultiJob _send_one] Failed to {chat}: {e}")
+            else:
+                await client.copy_message(
+                    chat_id=chat, from_chat_id=msg.chat.id,
+                    message_id=msg.id, **kw
+                )
+        except Exception as exc:
+            err = str(exc).upper()
+            if "RESTRICTED" not in err and "PROTECTED" not in err:
+                try:
+                    if not forward_tag:
+                        await client.forward_messages(chat_id=chat, from_chat_id=msg.chat.id, message_ids=msg.id, **kw)
+                    else:
+                        await client.copy_message(chat_id=chat, from_chat_id=msg.chat.id, message_id=msg.id, **kw)
+                    return
+                except Exception:
+                    pass
+            
+            # --- Fallback to Download/Re-upload for restricted sources ---
+            try:
+                media_obj = getattr(msg, msg.media.value, None) if msg.media else None
+                original_name = getattr(media_obj, 'file_name', None) if media_obj else None
+                if msg.media:
+                    safe_name = f"downloads/{msg.id}_{original_name}" if original_name else f"downloads/{msg.id}"
+                    fp = await client.download_media(msg, file_name=safe_name)
+                    if not fp: raise Exception("DownloadFailed")
+                    
+                    up_kw = {"chat_id": chat, "caption": kw.get("caption", msg.caption or "")}
+                    if thread: up_kw["message_thread_id"] = thread
+                    
+                    if msg.photo:      await client.send_photo(photo=fp, **up_kw)
+                    elif msg.video:    await client.send_video(video=fp, file_name=original_name, **up_kw)
+                    elif msg.document: await client.send_document(document=fp, file_name=original_name, **up_kw)
+                    elif msg.audio:    await client.send_audio(audio=fp, file_name=original_name, **up_kw)
+                    elif msg.voice:    await client.send_voice(voice=fp, **up_kw)
+                    elif msg.animation: await client.send_animation(animation=fp, **up_kw)
+                    elif msg.sticker:  await client.send_sticker(sticker=fp, **up_kw)
+                    
+                    import os
+                    if os.path.exists(fp): os.remove(fp)
+                else:
+                    await client.send_message(chat_id=chat, text=msg.text or "", **kw)
+            except Exception as fallback_e:
+                logger.debug(f"[MultiJob _send_one] Fallback failed to {chat}: {fallback_e}")
 
     await _send_one(to_chat, thread_id)
     if to_chat_2:
@@ -228,6 +264,7 @@ async def _run_multijob(job_id: str, user_id: int):
             # 'rm_caption' is True in DB when actively enabled via settings
             remove_caption = filters_dict.get('rm_caption', False)
             cap_tpl        = configs.get('caption')
+            forward_tag    = configs.get('forward_tag', False)
             sleep_secs     = max(1, int(configs.get('duration', 1) or 1))
 
             # Build batch
@@ -286,7 +323,7 @@ async def _run_multijob(job_id: str, user_id: int):
                 if not _passes_filters(msg, disabled_types):
                     continue
 
-                await _mj_forward(client, msg, to_chat, remove_caption, cap_tpl,
+                await _mj_forward(client, msg, to_chat, remove_caption, cap_tpl, forward_tag,
                                    to_thread, to_chat_2, to_thread_2)
                 fwd_count += 1
                 await asyncio.sleep(sleep_secs)

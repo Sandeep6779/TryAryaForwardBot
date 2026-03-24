@@ -151,7 +151,7 @@ def _passes_filters(msg, disabled_types: list) -> bool:
 # Send one message sequentially (copy_message with fallback)
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _send_one(client, msg, to_chat: int, remove_caption: bool, caption_tpl: str | None):
+async def _send_one(client, msg, to_chat: int, remove_caption: bool, caption_tpl: str | None, forward_tag: bool = False, thread_id: int = None):
     """Send a single message via copy_message. Falls back to download/re-upload if restricted."""
     from plugins.regix import custom_caption
 
@@ -161,33 +161,32 @@ async def _send_one(client, msg, to_chat: int, remove_caption: bool, caption_tpl
         if remove_caption:
             caption = ""
 
+    kw = {"message_thread_id": thread_id} if thread_id else {}
+    if caption is not None:
+        kw["caption"] = caption
+
     # ── Attempt 1: copy_message ──────────────────────────────────────────────
     try:
-        if caption is not None:
-            await client.copy_message(
-                chat_id=to_chat,
-                from_chat_id=msg.chat.id,
-                message_id=msg.id,
-                caption=caption
+        if forward_tag:
+            await client.forward_messages(
+                chat_id=to_chat, from_chat_id=msg.chat.id, message_ids=msg.id, **kw
             )
         else:
             await client.copy_message(
-                chat_id=to_chat,
-                from_chat_id=msg.chat.id,
-                message_id=msg.id
+                chat_id=to_chat, from_chat_id=msg.chat.id, message_id=msg.id, **kw
             )
         return True
     except FloodWait as fw:
         await asyncio.sleep(fw.value + 2)
-        return await _send_one(client, msg, to_chat, remove_caption, caption_tpl)
+        return await _send_one(client, msg, to_chat, remove_caption, caption_tpl, forward_tag, thread_id)
     except Exception as e:
         err = str(e).upper()
         if "RESTRICTED" not in err and "PROTECTED" not in err:
-            # Try forward_messages as second attempt
             try:
-                await client.forward_messages(
-                    chat_id=to_chat, from_chat_id=msg.chat.id, message_ids=msg.id
-                )
+                if not forward_tag:
+                    await client.forward_messages(chat_id=to_chat, from_chat_id=msg.chat.id, message_ids=msg.id, **kw)
+                else:
+                    await client.copy_message(chat_id=to_chat, from_chat_id=msg.chat.id, message_id=msg.id, **kw)
                 return True
             except Exception:
                 pass
@@ -283,6 +282,7 @@ async def _run_task_job(job_id: str, user_id: int):
             filters_dict   = configs.get('filters', {})
             remove_caption = filters_dict.get('rm_caption', False)
             cap_tpl        = configs.get('caption')
+            forward_tag    = configs.get('forward_tag', False)
             sleep_secs     = max(1, configs.get('duration', 1) or 1)
 
             # ── Build batch of IDs ─────────────────────────────────────────

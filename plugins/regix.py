@@ -203,9 +203,7 @@ async def pub_(bot, message):
                   if forward_tag:
                      MSG.append(message.id)
                      notcompleted = len(MSG)
-                     completed = sts.get('total') - sts.get('fetched')
-                     if ( notcompleted >= 100 
-                          or completed <= 100): 
+                     if notcompleted >= 100:
                         await forward(client, MSG, m, sts, protect)
                         sts.add('total_files', notcompleted)
                         await asyncio.sleep(10)
@@ -370,9 +368,14 @@ async def pub_(bot, message):
           # Tell uploader to stop
           await upload_queue.put(None)
           await uploader
-          # -------------------------------------------------------------
-
           
+          # -------------------------------------------------------------
+          # Flush any remaining forward_tag messages directly
+          if MSG:
+              await forward(client, MSG, m, sts, protect)
+              sts.add('total_files', len(MSG))
+              MSG.clear()
+
         except Exception as e:
             await msg_edit(m, f'<b>ERROR:</b>\n<code>{e}</code>', wait=True)
             if sts.TO in temp.IS_FRWD_CHAT:
