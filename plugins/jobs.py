@@ -81,8 +81,10 @@ async def _delete_job_db(job_id: str):
 async def _update_job(job_id: str, **kwargs):
     await db.db.jobs.update_one({"job_id": job_id}, {"$set": kwargs})
 
-async def _inc_forwarded(job_id: str, n: int = 1):
+async def _inc_forwarded(job_id: str, n: int = 1, forward_type: str = 'batch'):
     await db.db.jobs.update_one({"job_id": job_id}, {"$inc": {"forwarded": n}})
+    import asyncio as _asyncio
+    _asyncio.create_task(db.update_global_stats(**{f"{forward_type}_forward": n}))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -410,7 +412,7 @@ async def _run_job(job_id: str, user_id: int):
                     try:
                         await _forward_message(client, msg, to_chat, remove_caption, cap_tpl, forward_tag,
                                                to_thread, to_chat_2, to_thread_2, replacements)
-                        await _inc_forwarded(job_id, 1)
+                        await _inc_forwarded(job_id, 1, forward_type='batch')
                     except FloodWait as fw:
                         await asyncio.sleep(fw.value + 1)
                     except asyncio.CancelledError:
@@ -501,7 +503,7 @@ async def _run_job(job_id: str, user_id: int):
                 try:
                     await _forward_message(client, msg, to_chat, remove_caption, cap_tpl, forward_tag,
                                            to_thread, to_chat_2, to_thread_2)
-                    await _inc_forwarded(job_id, 1)
+                    await _inc_forwarded(job_id, 1, forward_type='live')
                 except FloodWait as fw:
                     await asyncio.sleep(fw.value + 1)
                 except asyncio.CancelledError:

@@ -28,13 +28,14 @@ class STS:
             setattr(self, k, v)
         return self
 
-    def add(self, key=None, value=1, time=False):
+    def add(self, key=None, value=1, time=False, forward_type='normal'):
         if time:
           return self.data[self.id].update({'start': tm.time()})
         self.data[self.id].update({key: self.get(key) + value}) 
         if key == 'total_files':
             import asyncio
-            asyncio.create_task(db.update_global_stats(normal_forward=value)) 
+            stat_key = f"{forward_type}_forward"
+            asyncio.create_task(db.update_global_stats(**{stat_key: value}))
     
     def divide(self, no, by):
        by = 1 if int(by) == 0 else by 

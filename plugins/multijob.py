@@ -96,6 +96,8 @@ async def _mj_update(job_id: str, **kwargs):
 
 async def _mj_inc(job_id: str, n: int = 1):
     await db.db[COLL].update_one({"job_id": job_id}, {"$inc": {"forwarded": n}})
+    import asyncio
+    asyncio.create_task(db.update_global_stats(batch_forward=n))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -198,7 +200,19 @@ async def _mj_forward(
                 original_name = getattr(media_obj, 'file_name', None) if media_obj else None
                 if msg.media:
                     safe_name = f"downloads/{msg.id}_{original_name}" if original_name else f"downloads/{msg.id}"
-                    fp = await client.download_media(msg, file_name=safe_name)
+                    fp = None
+                    for _dl_try in range(3):
+                        try:
+                            fp = await client.download_media(msg, file_name=safe_name)
+                            if fp: break
+                        except FloodWait as fw:
+                            await asyncio.sleep(fw.value + 2)
+                        except Exception as dl_e:
+                            err_dl = str(dl_e).upper()
+                            if "TIMEOUT" in err_dl or "CONNECTION" in err_dl:
+                                await asyncio.sleep(5)
+                                continue
+                            break
                     if not fp: raise Exception("DownloadFailed")
                     
                     up_kw = {"chat_id": chat, "caption": kw.get("caption", msg.caption or "")}
@@ -231,7 +245,7 @@ async def _mj_forward(
 BATCH_SIZE = 200
 
 
-async def _run_multijob(job_id: str, user_id: int):
+async def _run_multijob(job_id: str, user_id: int, bot=None):
     job = await _mj_get(job_id)
     if not job:
         return
@@ -273,6 +287,17 @@ async def _run_multijob(job_id: str, user_id: int):
             logger.warning(f"[MultiJob {job_id}] Pre-fetch peer resolve warning: {warn_e}")
 
         consecutive_empty = 0
+        batch_cycle = 0  # counter to refresh configs periodically
+        
+        # Load user settings once (refresh every 20 batches to pick up changes)
+        disabled_types = await db.get_filters(user_id)
+        configs        = await db.get_configs(user_id)
+        filters_dict   = configs.get('filters', {})
+        remove_caption = filters_dict.get('rm_caption', False)
+        cap_tpl        = configs.get('caption')
+        forward_tag    = configs.get('forward_tag', False)
+        sleep_secs     = max(1, int(configs.get('duration', 1) or 1))
+        replacements   = configs.get('replacements', {})
 
         while True:
             # Pause check
@@ -287,17 +312,35 @@ async def _run_multijob(job_id: str, user_id: int):
             if end_id > 0 and current > end_id:
                 await _mj_update(job_id, status="done", current_id=current)
                 logger.info(f"[MultiJob {job_id}] Done — reached end_id {end_id}")
+                # Send completion report
+                done_job = await _mj_get(job_id)
+                if done_job:
+                    try:
+                        await bot.send_message(
+                            user_id,
+                            f"<b>✅ Multi Job Complete!</b>\n\n"
+                            f"<b>Name:</b> {done_job.get('name', job_id[-6:])}\n"
+                            f"<b>Source:</b> {done_job.get('from_title','?')}\n"
+                            f"<b>Dest:</b> {done_job.get('to_title','?')}\n"
+                            f"<b>Forwarded:</b> {done_job.get('forwarded', 0)} messages\n"
+                            f"<b>Range:</b> {done_job.get('start_id',1)} → {end_id}\n\n"
+                            f"<i>Use /multijob to manage jobs.</i>"
+                        )
+                    except Exception:
+                        pass
                 break
 
-            # Load user settings
-            disabled_types = await db.get_filters(user_id)
-            configs        = await db.get_configs(user_id)
-            filters_dict   = configs.get('filters', {})
-            remove_caption = filters_dict.get('rm_caption', False)
-            cap_tpl        = configs.get('caption')
-            forward_tag    = configs.get('forward_tag', False)
-            sleep_secs     = max(1, int(configs.get('duration', 1) or 1))
-            replacements   = configs.get('replacements', {})
+            # Refresh configs every 20 batches
+            batch_cycle += 1
+            if batch_cycle % 20 == 1:
+                disabled_types = await db.get_filters(user_id)
+                configs        = await db.get_configs(user_id)
+                filters_dict   = configs.get('filters', {})
+                remove_caption = filters_dict.get('rm_caption', False)
+                cap_tpl        = configs.get('caption')
+                forward_tag    = configs.get('forward_tag', False)
+                sleep_secs     = max(1, int(configs.get('duration', 1) or 1))
+                replacements   = configs.get('replacements', {})
 
             # Build batch
             batch_end = current + BATCH_SIZE - 1
@@ -307,11 +350,7 @@ async def _run_multijob(job_id: str, user_id: int):
 
             # Fetch messages
             try:
-                if not is_bot:
-                    # Userbot: get_messages by ID
-                    msgs = await client.get_messages(from_chat, batch_ids)
-                else:
-                    msgs = await client.get_messages(from_chat, batch_ids)
+                msgs = await client.get_messages(from_chat, batch_ids)
                 if not isinstance(msgs, list):
                     msgs = [msgs]
             except FloodWait as fw:
@@ -334,6 +373,21 @@ async def _run_multijob(job_id: str, user_id: int):
                 if consecutive_empty >= 50:  # Allow 10,000 empty messages before giving up
                     await _mj_update(job_id, status="done", current_id=current)
                     logger.info(f"[MultiJob {job_id}] Done — no more messages after {current}")
+                    # Send completion report
+                    done_job2 = await _mj_get(job_id)
+                    if done_job2:
+                        try:
+                            await bot.send_message(
+                                user_id,
+                                f"<b>✅ Multi Job Complete!</b>\n\n"
+                                f"<b>Name:</b> {done_job2.get('name', job_id[-6:])}\n"
+                                f"<b>Source:</b> {done_job2.get('from_title','?')}\n"
+                                f"<b>Dest:</b> {done_job2.get('to_title','?')}\n"
+                                f"<b>Forwarded:</b> {done_job2.get('forwarded', 0)} messages\n\n"
+                                f"<i>No more messages found after ID {current}.</i>"
+                            )
+                        except Exception:
+                            pass
                     break
                 current += BATCH_SIZE
                 await _mj_update(job_id, current_id=current, consecutive_empty=consecutive_empty)
@@ -341,7 +395,6 @@ async def _run_multijob(job_id: str, user_id: int):
                 continue
 
             consecutive_empty = 0
-            await _mj_update(job_id, consecutive_empty=0)
 
             # Forward each valid message
             for msg in valid:
@@ -357,7 +410,7 @@ async def _run_multijob(job_id: str, user_id: int):
                     continue
 
                 await _mj_forward(client, msg, to_chat, remove_caption, cap_tpl, forward_tag,
-                                   to_thread, to_chat_2, to_thread_2, replacements)
+                                   to_thread, None, None, replacements)
                 
                 current = msg.id + 1
                 await _mj_update(job_id, current_id=current)
@@ -382,11 +435,11 @@ async def _run_multijob(job_id: str, user_id: int):
             except Exception: pass
 
 
-def _mj_start_task(job_id: str, user_id: int) -> asyncio.Task:
+def _mj_start_task(job_id: str, user_id: int, bot=None) -> asyncio.Task:
     ev = asyncio.Event()
     ev.set()
     _mj_paused[job_id] = ev
-    task = asyncio.create_task(_run_multijob(job_id, user_id))
+    task = asyncio.create_task(_run_multijob(job_id, user_id, bot=bot))
     _mj_tasks[job_id] = task
     return task
 
@@ -395,7 +448,7 @@ def _mj_start_task(job_id: str, user_id: int) -> asyncio.Task:
 # Resume on bot restart
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def resume_multi_jobs(user_id: int = None):
+async def resume_multi_jobs(user_id: int = None, bot=None):
     query = {"status": "running"}
     if user_id:
         query["user_id"] = user_id
@@ -403,7 +456,7 @@ async def resume_multi_jobs(user_id: int = None):
         jid = job["job_id"]
         uid = job["user_id"]
         if jid not in _mj_tasks:
-            _mj_start_task(jid, uid)
+            _mj_start_task(jid, uid, bot=bot)
             logger.info(f"[MultiJob] Resumed {jid} for user {uid}")
 
 
@@ -511,7 +564,6 @@ async def multijob_cmd(bot, message):
 async def mj_list_cb(bot, query):
     await query.answer()
     await _render_mj_list(bot, query.from_user.id, query)
-
 @Client.on_callback_query(filters.regex(r'^mj#rename#'))
 async def mj_rename_cb(bot, query):
     user_id = query.from_user.id
@@ -714,6 +766,7 @@ async def _create_mj_flow(bot, user_id: int):
     # ── Step 1: Name ──────────────────────────────────────────────────────────
     name_r = await _mj_ask(bot, user_id,
         "<b>⚡ Create Multi Job — Step 1/6</b>\n\n"
+        "<b>⚡ Create Multi Job — Step 1/5</b>\n\n"
         "Send a name for this job, or press 'Default' to use a random name.",
         reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Default")], [KeyboardButton("/cancel")]], resize_keyboard=True, one_time_keyboard=True))
     if "/cancel" in name_r.text:
@@ -736,7 +789,7 @@ async def _create_mj_flow(bot, user_id: int):
     acc_btns.append([KeyboardButton("/cancel")])
 
     acc_r = await _mj_ask(bot, user_id,
-        "<b>⚡ Create Multi Job — Step 2/6</b>\n\n"
+        "<b>⚡ Create Multi Job — Step 2/5</b>\n\n"
         "Choose which account to use:\n"
         "<i>(Userbot required for private/restricted channels)</i>",
         reply_markup=ReplyKeyboardMarkup(acc_btns, resize_keyboard=True, one_time_keyboard=True))
@@ -753,7 +806,7 @@ async def _create_mj_flow(bot, user_id: int):
 
     # ── Step 3: Source ────────────────────────────────────────────────────────
     src_r = await _mj_ask(bot, user_id,
-        "<b>Step 3/6 — Source Chat</b>\n\n"
+        "<b>Step 3/5 — Source Chat</b>\n\n"
         "Send one of:\n"
         "• <code>@username</code> or channel link\n"
         "• Numeric ID (e.g. <code>-1001234567890</code>)\n"
@@ -800,33 +853,20 @@ async def _create_mj_flow(bot, user_id: int):
             reply_markup=ReplyKeyboardRemove())
 
     to_chat, to_title, cancelled = await _mj_ask_dest(bot, user_id, channels,
-        "<b>Step 4/6 — Primary Destination</b>\n\nWhere should messages be sent?")
+        "<b>Step 4/5 — Destination</b>\n\nWhere should messages be sent?")
     if cancelled or not to_chat:
         return
 
-    to_thread = await _mj_ask_topic(bot, user_id, "Primary Destination")
+    to_thread = await _mj_ask_topic(bot, user_id, "Destination")
 
-    # ── Step 5: Second Destination (Optional) ─────────────────────────────────
-    to_chat_2, to_title_2, cancelled2 = await _mj_ask_dest(bot, user_id, channels,
-        "<b>Step 5/6 — Second Destination (Optional)</b>\n\n"
-        "Messages will be sent to <b>both</b> destinations simultaneously.\n"
-        "Press 'Skip' if you only need one destination.",
-        optional=True)
-    if cancelled2:
-        return
-
-    to_thread_2 = None
-    if to_chat_2:
-        to_thread_2 = await _mj_ask_topic(bot, user_id, "Second Destination")
-
-    # ── Step 6: Message Range ─────────────────────────────────────────────────
+    # ── Step 5: Message Range ─────────────────────────────────────────────────
     range_r = await _mj_ask(bot, user_id,
-        "<b>Step 6/6 — Message Range</b>\n\n"
+        "<b>Step 5/5 — Message Range</b>\n\n"
         "Choose which messages to copy:\n\n"
         "• Send <b>ALL</b> to copy from the very first message\n"
         "• Send a <b>start ID</b> (e.g. <code>100</code>) to start from that message\n"
         "• Send <b>start:end</b> (e.g. <code>100:5000</code>) for a specific range\n\n"
-        "<i>The job runs until all messages in the range are copied, then stops automatically.</i>",
+        "<i>The job stops automatically when all messages in the range are copied.</i>",
         reply_markup=ReplyKeyboardRemove())
 
     if "/cancel" in range_r.text:
@@ -858,9 +898,6 @@ async def _create_mj_flow(bot, user_id: int):
         "to_chat":        to_chat,
         "to_title":       to_title,
         "to_thread_id":   to_thread,
-        "to_chat_2":      to_chat_2,
-        "to_title_2":     to_title_2,
-        "to_thread_id_2": to_thread_2,
         "start_id":       start_id,
         "end_id":         end_id,
         "current_id":     start_id,
@@ -871,19 +908,16 @@ async def _create_mj_flow(bot, user_id: int):
         "error":          "",
     }
     await _mj_save(job)
-    _mj_start_task(job_id, user_id)
+    _mj_start_task(job_id, user_id, bot=bot)
 
     end_lbl   = f"to ID <code>{end_id}</code>" if end_id else "all messages"
     thread_lbl = f" → Topic <code>{to_thread}</code>" if to_thread else ""
-    dest2_lbl  = (f"\n<b>Dest 2:</b> {to_title_2}" +
-                  (f" → Topic <code>{to_thread_2}</code>" if to_thread_2 else "")) if to_chat_2 else ""
 
     await bot.send_message(
         user_id,
         f"<b>✅ Multi Job Created & Started!</b>\n\n"
-        f"⚡ <b>{from_title}</b> → <b>{to_title}</b>{thread_lbl}"
-        f"{dest2_lbl}\n"
-        f"<b>Account:</b> {'🤖 Bot' if is_bot else '👤 Userbot'}: {sel_acc.get('name','?')}\n"
+        f"⚡ <b>{from_title}</b> → <b>{to_title}</b>{thread_lbl}\n"
+        f"<b>Account:</b> {'\U0001f916 Bot' if is_bot else '\U0001f464 Userbot'}: {sel_acc.get('name','?')}\n"
         f"<b>Range:</b> From ID <code>{start_id}</code> · {end_lbl}\n"
         f"<b>Job ID:</b> <code>{job_id[-6:]}</code>\n\n"
         f"<i>Running in background.\nUse /multijob to manage.</i>",
