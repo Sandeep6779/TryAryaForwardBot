@@ -151,56 +151,145 @@ def _probe(fp):
     return info
 
 
-def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=None):
+def _ffprobe_duration(fp):
+    """Return duration in seconds (float) using ffprobe, or 0.0 on failure."""
+    try:
+        r = subprocess.run(
+            ["ffprobe","-v","quiet","-show_entries","format=duration",
+             "-of","default=noprint_wrappers=1:nokey=1", fp],
+            capture_output=True, text=True, timeout=30)
+        return float(r.stdout.strip())
+    except:
+        return 0.0
+
+
+def _build_atempo_chain(speed):
+    """Build FFmpeg atempo filter chain for speed (0.5x – 2.5x)."""
+    filters = []
+    rem = float(speed)
+    # atempo range is [0.5, 2.0]; chain multiple for values outside
+    while rem > 2.0:
+        filters.append("atempo=2.0")
+        rem /= 2.0
+    while rem < 0.5:
+        filters.append("atempo=0.5")
+        rem /= 0.5
+    if abs(rem - 1.0) > 0.001:
+        filters.append(f"atempo={rem:.4f}")
+    return ",".join(filters) if filters else ""
+
+
+def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=None, speed=1.0):
+    """Merge file_list → output_path. Tries lossless copy first, falls back to re-encode.
+    speed: 1.0 = normal, 2.5 = 2.5x faster (no pitch change via atempo).
+    Returns (ok: bool, error: str).
+    """
     lst = output_path + ".list.txt"
     try:
         with open(lst, "w", encoding="utf-8") as f:
             for fp in file_list:
-                f.write(f"file '{fp.replace(chr(39), chr(39)+chr(92)+chr(39)+chr(39))}'\n")
+                safe = fp.replace("'", "'\\''")
+                f.write(f"file '{safe}'\n")
 
-        # Try lossless
-        cmd = ["ffmpeg","-y","-threads","1","-f","concat","-safe","0","-i",lst,"-c","copy"]
-        if cover and os.path.exists(cover) and mtype == "audio":
-            cmd = ["ffmpeg","-y","-threads","1","-f","concat","-safe","0","-i",lst,
-                   "-i",cover,"-map","0:a","-map","1:0","-c:a","copy",
-                   "-id3v2_version","3","-metadata:s:v","title=Album cover",
-                   "-metadata:s:v","comment=Cover (front)"]
-        if metadata:
-            for k, v in metadata.items():
-                if v: cmd.extend(["-metadata", f"{k}={v}"])
-        cmd.append(output_path)
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
-        if r.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 0:
-            return True, ""
+        atempo = _build_atempo_chain(speed) if abs(speed - 1.0) > 0.001 else ""
+        needs_reencode = bool(atempo)
 
-        # Re-encode
+        if not needs_reencode:
+            # Try lossless concat copy first
+            cmd = ["ffmpeg","-y","-threads","1","-f","concat","-safe","0","-i",lst]
+            if cover and os.path.exists(cover) and mtype == "audio":
+                cmd += ["-i", cover, "-map","0:a","-map","1:0","-c:a","copy",
+                        "-id3v2_version","3",
+                        "-metadata:s:v","title=Album cover",
+                        "-metadata:s:v","comment=Cover (front)"]
+            else:
+                cmd += ["-c", "copy"]
+            if metadata:
+                for k, v in (metadata or {}).items():
+                    if v: cmd += ["-metadata", f"{k}={v}"]
+            cmd.append(output_path)
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+            if r.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+                return True, ""
+
+        # Re-encode (needed for speed change OR if lossless failed)
         cmd2 = ["ffmpeg","-y","-threads","1","-f","concat","-safe","0","-i",lst]
-        if cover and os.path.exists(cover): cmd2.extend(["-i", cover])
+        if cover and os.path.exists(cover) and mtype == "audio":
+            cmd2 += ["-i", cover]
         if mtype == "video":
-            cmd2.extend(["-c:v","libx264","-preset","fast","-crf","24",
-                         "-c:a","aac","-b:a","128k","-movflags","+faststart"])
+            vf = f"setpts={1.0/speed:.4f}*PTS" if abs(speed - 1.0) > 0.001 else ""
+            if vf: cmd2 += ["-vf", vf]
+            if atempo: cmd2 += ["-af", atempo]
+            cmd2 += ["-c:v","libx264","-preset","fast","-crf","24",
+                     "-c:a","aac","-b:a","128k","-movflags","+faststart"]
         else:
-            cmd2.extend(["-c:a","libmp3lame","-b:a","192k","-ar","44100"])
+            if atempo: cmd2 += ["-af", atempo]
+            # 192k MP3 — transparent quality, ~60% smaller than many originals
+            cmd2 += ["-c:a","libmp3lame","-b:a","192k","-ar","44100"]
             if cover and os.path.exists(cover):
-                cmd2.extend(["-map","0:a","-map","1:0","-id3v2_version","3",
-                             "-metadata:s:v","title=Album cover",
-                             "-metadata:s:v","comment=Cover (front)"])
+                cmd2 += ["-map","0:a","-map","1:0",
+                         "-id3v2_version","3",
+                         "-metadata:s:v","title=Album cover",
+                         "-metadata:s:v","comment=Cover (front)"]
         if metadata:
-            for k, v in metadata.items():
-                if v: cmd2.extend(["-metadata", f"{k}={v}"])
+            for k, v in (metadata or {}).items():
+                if v: cmd2 += ["-metadata", f"{k}={v}"]
         cmd2.append(output_path)
         r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=14400)
-        if r2.returncode != 0: return False, r2.stderr[-500:]
+        if r2.returncode != 0:
+            return False, r2.stderr[-600:]
         return True, ""
-    except subprocess.TimeoutExpired: return False, "FFmpeg timed out"
-    except Exception as e: return False, str(e)
+    except subprocess.TimeoutExpired:
+        return False, "FFmpeg timed out"
+    except Exception as e:
+        return False, str(e)
     finally:
-        if os.path.exists(lst): os.remove(lst)
+        try:
+            if os.path.exists(lst): os.remove(lst)
+        except: pass
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# Core runner — with pause/resume
+# Pre-download size scanner
 # ══════════════════════════════════════════════════════════════════════════════
+async def _scan_total_size(client, from_chat, start_id, end_id):
+    """Scan all messages in range and return (total_size_bytes, media_count) using
+    Telegram metadata only — NO file downloads."""
+    total = 0
+    count = 0
+    current = start_id
+    while current <= end_id:
+        batch_end = min(current + 200 - 1, end_id)
+        ids = list(range(current, batch_end + 1))
+        try:
+            msgs = await client.get_messages(from_chat, ids)
+            if not isinstance(msgs, list): msgs = [msgs]
+        except FloodWait as fw:
+            await asyncio.sleep(fw.value + 2)
+            continue
+        except:
+            current += 200
+            continue
+        for m in msgs:
+            if not m or m.empty or m.service or not m.media: continue
+            for attr in ('audio','video','document','voice','video_note'):
+                obj = getattr(m, attr, None)
+                if obj:
+                    total += getattr(obj, 'file_size', 0) or 0
+                    count += 1
+                    break
+        current = batch_end + 1
+        await asyncio.sleep(0.1)
+    return total, count
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Core runner — Chunked, Memory-safe
+# ══════════════════════════════════════════════════════════════════════════════
+CHUNK_SIZE   = 20          # Files downloaded at a time before partial merge
+MAX_TOTAL_GB = 15.0        # Hard limit on total estimated size across all files
+MAX_CHUNK_GB = 2.0         # Abort a single chunk if it somehow exceeds this
+
 async def _run_job(jid, uid, bot):
     job = await _db_get(jid)
     if not job: return
@@ -224,12 +313,10 @@ async def _run_job(jid, uid, bot):
         start_id   = job["start_id"]
         end_id     = job["end_id"]
         out_name   = job.get("output_name", "merged")
-        metadata   = job.get("metadata", {})
+        metadata   = job.get("metadata", {}) or {}
         dest_chats = job.get("dest_chats", [])
         mtype      = job.get("merge_type", "audio")
-
-        resume_id  = job.get("current_id", start_id)
-        dl_count   = job.get("downloaded", 0)
+        speed      = float(job.get("speed", 1.0))
 
         await _db_up(jid, status="queued", error="")
 
@@ -237,64 +324,129 @@ async def _run_job(jid, uid, bot):
         async with _mg_global_lock:
             fresh = await _db_get(jid)
             if not fresh or fresh.get("status") in ("stopped", "paused"): return
-            await _db_up(jid, status="downloading", error="")
+            await _db_up(jid, status="scanning", error="")
 
-        # Cover check
+        # ══════════════════════════════════════════════════════════════════
+        # PHASE 0 — Pre-download size scan
+        # ══════════════════════════════════════════════════════════════════
+        try:
+            scan_msg = await bot.send_message(uid,
+                f"<b>🔍 Scanning file sizes before download...</b>\n"
+                f"<i>Range: {start_id} → {end_id}</i>")
+        except: scan_msg = None
+
+        est_size, media_count = await _scan_total_size(client, from_chat, start_id, end_id)
+
+        if est_size > MAX_TOTAL_GB * 1024**3:
+            msg = (f"<b>❌ Pre-scan failed — total estimated size is {_sz(est_size)}, "
+                   f"which exceeds the {MAX_TOTAL_GB:.0f}GB limit.</b>\n\n"
+                   f"Please select a smaller range and try again.")
+            await _db_up(jid, status="error", error=msg)
+            try:
+                if scan_msg: await scan_msg.edit_text(msg)
+                else: await bot.send_message(uid, msg)
+            except: pass
+            return
+
+        try:
+            txt = (f"<b>✅ Pre-scan complete</b>\n"
+                   f"📁 {media_count} media files found\n"
+                   f"💾 Estimated total: <b>{_sz(est_size)}</b>\n"
+                   f"🔀 Will process in chunks of {CHUNK_SIZE} files\n"
+                   f"⚡ Speed: <b>{speed}x</b>")
+            if scan_msg: await scan_msg.edit_text(txt)
+            else: await bot.send_message(uid, txt)
+        except: pass
+
+        await asyncio.sleep(1)
+
+        # Cover
         cover = os.path.join(wdir, "cover.jpg")
         if not os.path.exists(cover): cover = None
 
-        # Collect existing downloads for resume — sort numerically by filename
-        existing = sorted(
-            [os.path.join(wdir, f) for f in os.listdir(wdir)
-             if f[0].isdigit() and not f.endswith(".list.txt")],
-            key=lambda p: os.path.basename(p)  # '000001.mp3' < '000002.mp3' lexicographically = numerically
-        )
-        dl_files = existing[:]
-        dl_bytes = sum(os.path.getsize(f) for f in existing)
-        dl_count = len(existing)  # Continue numbering from where we left off (resume-safe)
-        skipped = 0
-        dl_start = time.time()
-        status_msg = None
-        last_edit = 0
-        current = resume_id
-        total_range = end_id - start_id + 1
-
+        # ══════════════════════════════════════════════════════════════════
+        # PHASE 1 — Collect all media message IDs in strict order
+        # ══════════════════════════════════════════════════════════════════
+        await _db_up(jid, status="downloading", error="")
+        all_msgs_ordered = []   # list of (msg_id, msg) in channel order
+        current = start_id
         while current <= end_id:
-            # Pause
-            if not ev.is_set():
-                await _db_up(jid, status="paused", current_id=current)
-                return  # Exit to release global lock; resume will restart
-
-            # Stop
-            fresh = await _db_get(jid)
-            if not fresh or fresh.get("status") == "stopped": return
-
             batch_end = min(current + 200 - 1, end_id)
             ids = list(range(current, batch_end + 1))
-
             try:
                 msgs = await client.get_messages(from_chat, ids)
                 if not isinstance(msgs, list): msgs = [msgs]
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 2); continue
             except Exception as e:
-                logger.warning(f"[MG {jid}] fetch: {e}")
+                logger.warning(f"[MG {jid}] collect: {e}")
                 current += 200; continue
+            for m in sorted([x for x in msgs if x and not x.empty and not x.service], key=lambda x: x.id):
+                if not m.media: continue
+                for attr in ('audio','video','document','voice','video_note'):
+                    if getattr(m, attr, None):
+                        all_msgs_ordered.append(m)
+                        break
+            current = batch_end + 1
+            await asyncio.sleep(0.2)
 
-            valid = sorted([m for m in msgs if m and not m.empty and not m.service],
-                           key=lambda m: m.id)
+        if not all_msgs_ordered:
+            await _db_up(jid, status="error", error="No media files found in range")
+            await bot.send_message(uid, "<b>❌ No media files found in the selected range.</b>")
+            return
 
-            for msg in valid:
-                if not msg.media: skipped += 1; continue
+        total_files = len(all_msgs_ordered)
+        total_chunks = (total_files + CHUNK_SIZE - 1) // CHUNK_SIZE
+
+        try:
+            await bot.send_message(uid,
+                f"<b>⬇️ Starting download</b>\n"
+                f"📁 {total_files} files → {total_chunks} chunk(s) of max {CHUNK_SIZE}\n"
+                f"<i>Each chunk is downloaded, merged, then deleted to save RAM.</i>")
+        except: pass
+
+        # ══════════════════════════════════════════════════════════════════
+        # PHASE 2 — Chunked download + partial merge
+        # ══════════════════════════════════════════════════════════════════
+        part_files  = []     # merged part paths: part_001.mp3, part_002.mp3 ...
+        log_entries = []     # [(original_filename, cumulative_start_ts)]
+        cumulative_secs = 0.0
+        dl_total_bytes = 0
+        global_seq = 0       # zero-padded counter across ALL files
+
+        for chunk_idx in range(total_chunks):
+            # Check pause / stop
+            if not ev.is_set():
+                await _db_up(jid, status="paused", downloaded=global_seq)
+                return
+            fresh = await _db_get(jid)
+            if not fresh or fresh.get("status") == "stopped": return
+
+            chunk_msgs = all_msgs_ordered[chunk_idx * CHUNK_SIZE : (chunk_idx + 1) * CHUNK_SIZE]
+            chunk_num  = chunk_idx + 1
+            chunk_label = f"Part {chunk_num}/{total_chunks}"
+            chunk_dir  = os.path.join(wdir, f"chunk_{chunk_num:04d}")
+            os.makedirs(chunk_dir, exist_ok=True)
+
+            chunk_files = []
+            chunk_bytes = 0
+            status_msg  = None
+
+            try:
+                status_msg = await bot.send_message(uid,
+                    f"<b>⬇️ {chunk_label} — Downloading {len(chunk_msgs)} files</b>")
+            except: pass
+
+            for ci, msg in enumerate(chunk_msgs):
                 media_obj = None
                 for attr in ('audio','video','document','voice','video_note'):
                     media_obj = getattr(msg, attr, None)
                     if media_obj: break
-                if not media_obj: skipped += 1; continue
+                if not media_obj: continue
 
-                # Extension
                 ext = ""
                 fn = getattr(media_obj, 'file_name', None)
+                original_name = fn or f"file_{global_seq+1}"
                 if fn: ext = os.path.splitext(fn)[1].lower()
                 if not ext:
                     if getattr(msg,'audio',None):
@@ -308,107 +460,146 @@ async def _run_job(jid, uid, bot):
                         mime = getattr(media_obj,'mime_type','') or ''
                         ext = ".mp3" if 'audio' in mime else ".mp4" if 'video' in mime else ".bin"
 
-                seq = f"{dl_count:06d}{ext}"
-                dlp = os.path.join(wdir, seq)
+                seq_name = f"{global_seq:06d}{ext}"
+                dlp = os.path.join(chunk_dir, seq_name)
 
                 fp = None
                 for att in range(5):
                     try:
                         fp = await client.download_media(msg, file_name=dlp)
                         if fp: break
-                    except FloodWait as fw: await asyncio.sleep(fw.value+2)
+                    except FloodWait as fw: await asyncio.sleep(fw.value + 2)
                     except Exception:
                         if att < 4: await asyncio.sleep(3); continue
                         break
 
                 if fp and os.path.exists(fp):
-                    dl_bytes += os.path.getsize(fp)
-                    dl_files.append(fp)
-                    dl_count += 1
-                    await _db_up(jid, downloaded=dl_count, current_id=msg.id,
-                                 total_dl_bytes=dl_bytes)
-                    
-                    await asyncio.sleep(0.5)  # Smart delay to reduce memory/CPU load
+                    fsz = os.path.getsize(fp)
+                    chunk_bytes += fsz
+                    dl_total_bytes += fsz
+                    chunk_files.append(fp)
+                    global_seq += 1
 
-                    now = time.time()
-                    if now - last_edit >= 3:
-                        last_edit = now
-                        elapsed = now - dl_start
-                        speed = dl_bytes / elapsed if elapsed > 0 else 0
-                        left = total_range - dl_count - skipped
-                        dl_eta = left * elapsed / max(dl_count, 1)
-                        mg_eta = dl_bytes / 10485760  # Estimate: 10MB/s merge speed
-                        up_eta = dl_bytes / max(speed * 0.8, 1) if speed else 0
-                        total_eta = dl_eta + mg_eta + up_eta
-                        
-                        await _db_up(jid, dl_eta=dl_eta, mg_eta=mg_eta, up_eta=up_eta, total_eta=total_eta)
+                    # Log entry: timecode + original name (before speed adjustment)
+                    h = int(cumulative_secs // 3600)
+                    m_ = int((cumulative_secs % 3600) // 60)
+                    s_ = int(cumulative_secs % 60)
+                    tc = f"{h:02d}:{m_:02d}:{s_:02d}"
+                    log_entries.append((tc, original_name, global_seq))
 
-                        mtype_icon = "🎵" if mtype == "audio" else "🎬"
-                        txt = (f"<b>{mtype_icon} {out_name} — Downloading</b>\n\n"
-                               f"<code>{_bar(dl_count, total_range - skipped)}</code>\n\n"
-                               f"📁 {dl_count}/{total_range - skipped} files\n"
-                               f"💾 {_sz(dl_bytes)} • ⚡ {_spd(speed)}\n"
-                               f"⏱ ETA: {_tm(dl_eta)}")
+                    # Probe duration for log
+                    dur = _ffprobe_duration(fp)
+                    # Apply speed factor to cumulative time
+                    cumulative_secs += dur / max(speed, 0.1)
+
+                    await _db_up(jid, downloaded=global_seq, current_id=msg.id,
+                                 total_dl_bytes=dl_total_bytes)
+                    await asyncio.sleep(0.3)
+
+                    # Update status every 3 files
+                    if ci % 3 == 0:
+                        pct = int((global_seq / total_files) * 100)
                         try:
+                            txt = (f"<b>⬇️ {chunk_label} — Downloading</b>\n"
+                                   f"<code>{_bar(global_seq, total_files)}</code>\n"
+                                   f"📁 {global_seq}/{total_files} total • {_sz(dl_total_bytes)}")
                             if status_msg: await status_msg.edit_text(txt)
-                            else: status_msg = await bot.send_message(uid, txt)
                         except: pass
-                else:
-                    skipped += 1
 
-            current = batch_end + 1
-            await _db_up(jid, current_id=current)
+            if not chunk_files:
+                logger.warning(f"[MG {jid}] Chunk {chunk_num} had no downloadable files, skipping.")
+                continue
 
-        dl_time = time.time() - dl_start
+            # Partial merge of this chunk
+            await _db_up(jid, status="merging")
+            part_ext  = ".mp4" if mtype == "video" else ".mp3"
+            part_path = os.path.join(wdir, f"part_{chunk_num:04d}{part_ext}")
 
-        if not dl_files:
-            await _db_up(jid, status="error", error="No media files found")
             try:
-                t = "<b>❌ No media files found in range.</b>"
-                if status_msg: await status_msg.edit_text(t)
-                else: await bot.send_message(uid, t)
+                if status_msg: await status_msg.edit_text(
+                    f"<b>🔀 {chunk_label} — Merging {len(chunk_files)} files→ part {chunk_num}</b>")
             except: pass
-            return
 
-        try:
-            t = f"<b>✅ Download Complete</b>\n📁 {dl_count} files • {_sz(dl_bytes)} • ⏱ {_tm(dl_time)}"
-            if status_msg: await status_msg.edit_text(t)
-            else: await bot.send_message(uid, t)
-        except: pass
+            chunk_files_sorted = sorted(chunk_files, key=lambda p: os.path.basename(p))
+            loop = asyncio.get_event_loop()
+            # Chunk parts: always lossless (speed applied at final merge only)
+            ok, err = await loop.run_in_executor(
+                None, _ffmpeg_merge, chunk_files_sorted, part_path, None, mtype, None, 1.0)
 
-        # ── Phase 2: Merge ────────────────────────────────────────────────
-        merge_start = time.time()
+            if not ok:
+                await _db_up(jid, status="error", error=f"Chunk {chunk_num} merge failed: {err[:300]}")
+                await bot.send_message(uid, f"<b>❌ Chunk {chunk_num} merge failed:</b>\n<code>{err[:300]}</code>")
+                return
+
+            part_files.append(part_path)
+
+            # ✅ Delete chunk originals immediately to free disk
+            for f in chunk_files:
+                try: os.remove(f)
+                except: pass
+            try: os.rmdir(chunk_dir)
+            except: pass
+
+            await _db_up(jid, status="downloading")
+            try:
+                if status_msg: await status_msg.edit_text(
+                    f"<b>✅ {chunk_label} done</b>\n"
+                    f"💾 Part size: {_sz(os.path.getsize(part_path))} • "
+                    f"Total so far: {_sz(dl_total_bytes)}")
+            except: pass
+            await asyncio.sleep(1)
+
+        # ══════════════════════════════════════════════════════════════════
+        # PHASE 3 — Final combine of all parts
+        # ══════════════════════════════════════════════════════════════════
         await _db_up(jid, status="merging")
-
-        out_ext = ".mp4" if mtype == "video" else ".mp3"
+        out_ext  = ".mp4" if mtype == "video" else ".mp3"
         out_path = os.path.join(wdir, f"{out_name}{out_ext}")
 
         try:
             await bot.send_message(uid,
-                f"<b>🔀 Merging {dl_count} files → <code>{out_name}{out_ext}</code></b>\n"
-                f"<i>Lossless if codecs match, otherwise high-quality re-encode.</i>")
+                f"<b>🔀 Final combine: {len(part_files)} parts → {out_name}{out_ext}</b>\n"
+                f"{'⚡ Applying speed ' + str(speed) + 'x during final merge' if abs(speed-1.0)>0.001 else '🎯 Lossless combine (speed=1.0x)'}")
         except: pass
-        
-        avg_dl_speed = dl_bytes / dl_time if dl_time > 0 else 1048576
-        mg_eta_static = dl_bytes / 10485760
-        up_eta_static = dl_bytes / avg_dl_speed
-        await _db_up(jid, dl_eta=0, mg_eta=mg_eta_static, up_eta=up_eta_static, total_eta=(mg_eta_static + up_eta_static))
 
-        # ⚠️ CRITICAL: Sort strictly by filename (000001.mp3, 000002.mp3 ...)
-        # This guarantees FFmpeg receives files in EXACT download order (1→2→3→...)
-        # regardless of OS filesystem ordering or any resume/append sequence.
-        dl_files_ordered = sorted(dl_files, key=lambda p: os.path.basename(p))
-
+        part_files_sorted = sorted(part_files, key=lambda p: os.path.basename(p))
         loop = asyncio.get_event_loop()
         ok, err = await loop.run_in_executor(
-            None, _ffmpeg_merge, dl_files_ordered, out_path, metadata, mtype, cover)
-        merge_time = time.time() - merge_start
+            None, _ffmpeg_merge, part_files_sorted, out_path, metadata, mtype, cover, speed)
 
         if not ok:
             await _db_up(jid, status="error", error=err[:500])
-            try: await bot.send_message(uid, f"<b>❌ Merge failed!</b>\n<code>{err[:400]}</code>")
+            try: await bot.send_message(uid, f"<b>❌ Final merge failed!</b>\n<code>{err[:400]}</code>")
             except: pass
             return
+
+        # Clean up part files
+        for pf in part_files:
+            try: os.remove(pf)
+            except: pass
+
+        # ══════════════════════════════════════════════════════════════════
+        # PHASE 3b — Generate processing log
+        # ══════════════════════════════════════════════════════════════════
+        log_path = os.path.join(wdir, f"{out_name}_log.txt")
+        try:
+            with open(log_path, "w", encoding="utf-8") as lf:
+                lf.write(f"Processing Log — {out_name}\n")
+                lf.write(f"Generated: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
+                lf.write(f"Files: {total_files} | Speed: {speed}x | Type: {mtype}\n")
+                lf.write("=" * 60 + "\n\n")
+                lf.write("TIMECODES (YouTube Chapter Format)\n")
+                lf.write("-" * 40 + "\n")
+                for tc, name, seq in log_entries:
+                    lf.write(f"{tc} {seq:04d}. {name}\n")
+        except Exception as e:
+            logger.warning(f"Log write failed: {e}")
+            log_path = None
+
+        merge_time = 0  # kept for compat
+        dl_time = 0
+
+        # (ok/err check already handled above per-chunk and at final merge)
 
         fsize = os.path.getsize(out_path)
         if fsize > 2 * 1024**3:
@@ -421,14 +612,14 @@ async def _run_job(jid, uid, bot):
         up_start = time.time()
         await _db_up(jid, status="uploading")
 
-        caption = f"<b>🔀 {out_name}{out_ext}</b>\n📁 {dl_count} files • {_sz(fsize)}"
+        caption = f"<b>🔀 {out_name}{out_ext}</b>\n📁 {global_seq} files • {_sz(fsize)}"
         if metadata.get("title"): caption += f"\n🎵 {metadata['title']}"
         if metadata.get("artist"): caption += f" — {metadata['artist']}"
 
         all_dests = [uid] + [d for d in dest_chats if d != uid]
         thumb = cover if cover and os.path.exists(cover) else None
 
-        avg_dl_speed = dl_bytes / dl_time if dl_time > 0 else 1048576
+        avg_dl_speed = max(dl_total_bytes, 1) / 60  # estimate: assume ~1min DL time for speed calc
         up_eta_static = fsize / avg_dl_speed
         await _db_up(jid, dl_eta=0, mg_eta=0, up_eta=up_eta_static, total_eta=up_eta_static)
 
@@ -461,23 +652,27 @@ async def _run_job(jid, uid, bot):
                     logger.warning(f"[MG {jid}] upload {dest}: {e}"); break
 
         up_time = time.time() - up_start
-        total_time = dl_time + merge_time + up_time
 
-        await _db_up(jid, status="done", dl_time=dl_time, merge_time=merge_time,
-                     up_time=up_time, total_time=total_time, file_size=fsize)
+        # Upload log file if generated
+        if log_path and os.path.exists(log_path):
+            try:
+                await client.send_document(chat_id=uid, document=log_path,
+                    caption=f"<b>📋 Processing Log</b>\n{out_name}")
+            except: pass
+
+        total_time = up_time
+        await _db_up(jid, status="done", total_time=total_time, file_size=fsize)
 
         try:
             await bot.send_message(uid,
                 f"<b>✅ Merge Complete!</b>\n\n"
                 f"╭───── 📊 ─────╮\n"
-                f"┃ 📁 Files: {dl_count}\n"
+                f"┃ 📁 Files: {global_seq}\n"
                 f"┃ 📦 {out_name}{out_ext}\n"
                 f"┃ 💾 {_sz(fsize)}\n"
-                f"┃\n"
-                f"┃ ⬇️ DL: {_tm(dl_time)}\n"
-                f"┃ 🔀 Merge: {_tm(merge_time)}\n"
+                f"┃ ⚡ Speed: {speed}x\n"
                 f"┃ ⬆️ Upload: {_tm(up_time)}\n"
-                f"┃ ⏱ Total: {_tm(total_time)}\n"
+                f"┃ ⏱ Total parts: {total_chunks}\n"
                 f"╰─────────────╯")
         except: pass
 
