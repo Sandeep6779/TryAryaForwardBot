@@ -243,11 +243,15 @@ async def _run_job(jid, uid, bot):
         cover = os.path.join(wdir, "cover.jpg")
         if not os.path.exists(cover): cover = None
 
-        # Collect existing downloads for resume
-        existing = sorted([os.path.join(wdir, f) for f in os.listdir(wdir)
-                           if f[0].isdigit() and not f.endswith(".list.txt")])
+        # Collect existing downloads for resume — sort numerically by filename
+        existing = sorted(
+            [os.path.join(wdir, f) for f in os.listdir(wdir)
+             if f[0].isdigit() and not f.endswith(".list.txt")],
+            key=lambda p: os.path.basename(p)  # '000001.mp3' < '000002.mp3' lexicographically = numerically
+        )
         dl_files = existing[:]
         dl_bytes = sum(os.path.getsize(f) for f in existing)
+        dl_count = len(existing)  # Continue numbering from where we left off (resume-safe)
         skipped = 0
         dl_start = time.time()
         status_msg = None
@@ -390,9 +394,14 @@ async def _run_job(jid, uid, bot):
         up_eta_static = dl_bytes / avg_dl_speed
         await _db_up(jid, dl_eta=0, mg_eta=mg_eta_static, up_eta=up_eta_static, total_eta=(mg_eta_static + up_eta_static))
 
+        # ⚠️ CRITICAL: Sort strictly by filename (000001.mp3, 000002.mp3 ...)
+        # This guarantees FFmpeg receives files in EXACT download order (1→2→3→...)
+        # regardless of OS filesystem ordering or any resume/append sequence.
+        dl_files_ordered = sorted(dl_files, key=lambda p: os.path.basename(p))
+
         loop = asyncio.get_event_loop()
         ok, err = await loop.run_in_executor(
-            None, _ffmpeg_merge, dl_files, out_path, metadata, mtype, cover)
+            None, _ffmpeg_merge, dl_files_ordered, out_path, metadata, mtype, cover)
         merge_time = time.time() - merge_start
 
         if not ok:
