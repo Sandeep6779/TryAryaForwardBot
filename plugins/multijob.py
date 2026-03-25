@@ -104,6 +104,16 @@ async def _mj_inc(job_id: str, n: int = 1):
 # Filter helpers (global user filters)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _msg_in_topic(msg, from_thread_id: int) -> bool:
+    """Return True if msg belongs to the given source topic."""
+    tid = getattr(msg, "message_thread_id", None)
+    if tid is not None and int(tid) == from_thread_id:
+        return True
+    if int(msg.id) == from_thread_id:
+        return True
+    return False
+
+
 def _passes_filters(msg, disabled_types: list) -> bool:
     if msg.empty or msg.service:
         return False
@@ -395,6 +405,12 @@ async def _run_multijob(job_id: str, user_id: int, bot=None):
                 continue
 
             consecutive_empty = 0
+
+            # Filter by source topic if configured
+            from_thread = job.get("from_thread")
+            if from_thread:
+                from_thread = int(from_thread)
+                valid = [m for m in valid if _msg_in_topic(m, from_thread)]
 
             # Forward each valid message
             for msg in valid:

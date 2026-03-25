@@ -140,6 +140,21 @@ def _passes_size_limit(msg, max_size_mb: int, max_duration_secs: int) -> bool:
     return True
 
 
+def _msg_in_topic(msg, from_thread_id: int) -> bool:
+    """Return True if `msg` belongs to the given source topic (thread).
+    Telegram stores the topic ID in `message_thread_id`.
+    The very first message that creates the topic has msg.id == thread_id
+    and may not carry `message_thread_id`, so we check that too.
+    """
+    tid = getattr(msg, "message_thread_id", None)
+    if tid is not None and int(tid) == from_thread_id:
+        return True
+    # The topic-starter message itself (msg.id == topic_id)
+    if int(msg.id) == from_thread_id:
+        return True
+    return False
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Forward helper — supports dual destination + topic threads
 # ══════════════════════════════════════════════════════════════════════════════
@@ -405,6 +420,12 @@ async def _run_job(job_id: str, user_id: int):
                 else:
                     consecutive_empty = 0
 
+                # Filter by source topic if configured
+                from_thread = job.get("from_thread")
+                if from_thread:
+                    from_thread = int(from_thread)
+                    valid = [m for m in valid if _msg_in_topic(m, from_thread)]
+
                 for msg in valid:
                     # Re-check stop between every message
                     fresh2 = await _get_job(job_id)
@@ -499,6 +520,12 @@ async def _run_job(job_id: str, user_id: int):
                 logger.warning(f"[Job {job_id}] Fetch error: {e}")
                 await asyncio.sleep(15)
                 continue
+
+            # Filter by source topic if configured
+            from_thread = job.get("from_thread")
+            if from_thread:
+                from_thread = int(from_thread)
+                new_msgs = [m for m in new_msgs if _msg_in_topic(m, from_thread)]
 
             for msg in new_msgs:
                 if not _passes_filters(msg, disabled_types):

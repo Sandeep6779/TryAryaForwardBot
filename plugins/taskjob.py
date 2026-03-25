@@ -128,6 +128,16 @@ def _st_emoji(status: str) -> str:
 # Filter helper (same as jobs.py)
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _msg_in_topic(msg, from_thread_id: int) -> bool:
+    """Return True if msg belongs to the given source topic."""
+    tid = getattr(msg, "message_thread_id", None)
+    if tid is not None and int(tid) == from_thread_id:
+        return True
+    if int(msg.id) == from_thread_id:
+        return True
+    return False
+
+
 def _passes_filters(msg, disabled_types: list) -> bool:
     if msg.empty or msg.service:
         return False
@@ -384,13 +394,19 @@ async def _run_task_job(job_id: str, user_id: int):
             fwd_count = 0
             seq_counter = 0
             
+            # Filter by source topic if configured
+            from_thread = job.get("from_thread")
+            if from_thread:
+                from_thread = int(from_thread)
+                valid = [m for m in valid if _msg_in_topic(m, from_thread)]
+
             for msg in valid:
                 await pause_ev.wait()
                 fresh2 = await _tj_get(job_id)
                 if not fresh2 or fresh2.get("status") in ("stopped",):
                     for _ in workers: await dl_queue.put(None)
                     return
-                
+
                 if not _passes_filters(msg, disabled_types):
                     continue
 
