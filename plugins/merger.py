@@ -187,9 +187,11 @@ def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=No
     """
     lst = output_path + ".list.txt"
     try:
+        # CRITICAL: use absolute paths so FFmpeg can find files regardless of CWD
         with open(lst, "w", encoding="utf-8") as f:
             for fp in file_list:
-                safe = fp.replace("'", "'\\''")
+                abs_fp = os.path.abspath(fp).replace("\\", "/")
+                safe = abs_fp.replace("'", "'\\''")
                 f.write(f"file '{safe}'\n")
 
         atempo = _build_atempo_chain(speed) if abs(speed - 1.0) > 0.001 else ""
@@ -209,22 +211,26 @@ def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=No
                 for k, v in (metadata or {}).items():
                     if v: cmd += ["-metadata", f"{k}={v}"]
             cmd.append(output_path)
+            # CRITICAL: also use absolute output path in lossless attempt
+            abs_out = os.path.abspath(output_path)
+            cmd[-1] = abs_out  # replace last element (output_path) with absolute
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
-            if r.returncode == 0 and os.path.exists(output_path) and os.path.getsize(output_path) > 1000:
+            if r.returncode == 0 and os.path.exists(abs_out) and os.path.getsize(abs_out) > 1000:
                 return True, ""
 
-        # Re-encode (needed for speed change OR if lossless failed)
+        # Re-encode path
         cmd2 = ["ffmpeg","-y","-threads","1"]
-        if make_video and cover and os.path.exists(cover) and mtype == "audio":
-            # Image + Audio merged to Video
-            cmd2 += ["-loop", "1", "-framerate", "1", "-i", cover]
+        eff_cover = video_cover or cover  # use video_cover if available
+        if make_video and eff_cover and os.path.exists(eff_cover) and mtype == "audio":
+            # Static image + audio → MP4 video (very low RAM with -tune stillimage)
+            cmd2 += ["-loop", "1", "-framerate", "1", "-i", os.path.abspath(eff_cover)]
             cmd2 += ["-f","concat","-safe","0","-i",lst]
             if atempo: cmd2 += ["-af", atempo]
-            cmd2 += ["-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac", "-b:a", "192k", "-pix_fmt", "yuv420p", "-shortest"]
+            cmd2 += ["-c:v","libx264","-tune","stillimage","-c:a","aac","-b:a","192k","-pix_fmt","yuv420p","-shortest"]
         else:
             cmd2 += ["-f","concat","-safe","0","-i",lst]
-            if cover and os.path.exists(cover) and mtype == "audio":
-                cmd2 += ["-i", cover]
+            if cover and os.path.exists(cover) and mtype == "audio" and not make_video:
+                cmd2 += ["-i", os.path.abspath(cover)]
             if mtype == "video":
                 vf = f"setpts={1.0/speed:.4f}*PTS" if abs(speed - 1.0) > 0.001 else ""
                 if vf: cmd2 += ["-vf", vf]
@@ -233,9 +239,8 @@ def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=No
                          "-c:a","aac","-b:a","128k","-movflags","+faststart"]
             else:
                 if atempo: cmd2 += ["-af", atempo]
-                # 192k MP3 — transparent quality, ~60% smaller than many originals
                 cmd2 += ["-c:a","libmp3lame","-b:a","192k","-ar","44100"]
-                if cover and os.path.exists(cover):
+                if cover and os.path.exists(cover) and not make_video:
                     cmd2 += ["-map","0:a","-map","1:0",
                              "-id3v2_version","3",
                              "-metadata:s:v","title=Album cover",
@@ -243,10 +248,15 @@ def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=No
         if metadata:
             for k, v in (metadata or {}).items():
                 if v: cmd2 += ["-metadata", f"{k}={v}"]
-        cmd2.append(output_path)
+        # CRITICAL: always use the absolute path for output
+        abs_output = os.path.abspath(output_path)
+        cmd2.append(abs_output)
         r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=14400)
         if r2.returncode != 0:
-            return False, r2.stderr[-600:]
+            return False, r2.stderr[-800:]
+        # Verify output at its absolute path
+        if not os.path.exists(abs_output) or os.path.getsize(abs_output) < 100:
+            return False, "FFmpeg ran without error but output file is missing or empty."
         return True, ""
     except subprocess.TimeoutExpired:
         return False, "FFmpeg timed out"
@@ -326,6 +336,8 @@ async def _run_job(jid, uid, bot):
         dest_chats = job.get("dest_chats", [])
         mtype      = job.get("merge_type", "audio")
         speed      = float(job.get("speed", 1.0))
+        make_video = bool(job.get("make_video", False))
+        upload_to_yt = bool(job.get("upload_to_yt", False))
 
         await _db_up(jid, status="queued", error="")
 
@@ -369,9 +381,19 @@ async def _run_job(jid, uid, bot):
 
         await asyncio.sleep(1)
 
-        # Cover
-        cover = os.path.join(wdir, "cover.jpg")
-        if not os.path.exists(cover): cover = None
+        # Cover — load from job dir
+        cover = None
+        if job.get("has_cover"):
+            _cp = os.path.abspath(os.path.join(wdir, "cover.jpg"))
+            if os.path.exists(_cp):
+                cover = _cp
+        
+        # Video-specific cover image (separate from MP3 cover art)
+        video_cover = None
+        if job.get("has_video_cover"):
+            _vcp = os.path.abspath(os.path.join(wdir, "video_cover.jpg"))
+            if os.path.exists(_vcp):
+                video_cover = _vcp
 
         # ══════════════════════════════════════════════════════════════════
         # PHASE 1 — Collect all media message IDs in strict order
@@ -562,22 +584,27 @@ async def _run_job(jid, uid, bot):
         # PHASE 3 — Final combine of all parts
         # ══════════════════════════════════════════════════════════════════
         await _db_up(jid, status="merging")
-        make_video = job.get("make_video", False)
         
-        # If make_video is true dynamically overwrite the out_ext for the final combination:
+        # If make_video is true, output will be mp4 regardless of mtype
         out_ext  = ".mp4" if (mtype == "video" or make_video) else ".mp3"
-        out_path = os.path.join(wdir, f"{out_name}{out_ext}")
+        out_path = os.path.abspath(os.path.join(wdir, f"{out_name}{out_ext}"))
+
+        # Use video_cover for video creation; fall back to audio cover if no dedicated one
+        effective_cover_for_video = video_cover or cover
 
         try:
             await bot.send_message(uid,
                 f"<b>🔀 Final combine: {len(part_files)} parts → {out_name}{out_ext}</b>\n"
-                f"{'⚡ Applying speed ' + str(speed) + 'x during final merge' if abs(speed-1.0)>0.001 else '🎯 Lossless combine (speed=1.0x)'}")
+                f"{'⚡ Applying speed ' + str(speed) + 'x during final merge' if abs(speed-1.0)>0.001 else '🎯 Lossless combine (speed=1.0x)'}"
+                f"{'\n🎥 Building MP4 video...' if make_video else ''}")
         except: pass
 
         part_files_sorted = sorted(part_files, key=lambda p: os.path.basename(p))
         loop = asyncio.get_event_loop()
         ok, err = await loop.run_in_executor(
-            None, _ffmpeg_merge, part_files_sorted, out_path, metadata, mtype, cover, speed, make_video)
+            None, _ffmpeg_merge, part_files_sorted, out_path, metadata, mtype,
+            cover,  # audio cover (for MP3 cover art)
+            speed, make_video, effective_cover_for_video)
 
         if not ok:
             await _db_up(jid, status="error", error=err[:500])
@@ -1060,6 +1087,23 @@ async def _create_flow(bot, uid, mtype="audio"):
             return await bot.send_message(uid, "<b>Cancelled.</b>")
         out_name = re.sub(r'[<>:"/\\|?*]', '_', msg.text.strip())
 
+        # Step 5b: Speed
+        speed_kb = [
+            ["1.0x (Normal)", "1.25x", "1.5x"],
+            ["1.75x", "2.0x", "2.5x"],
+            ["0.75x (Slower)", "0.5x (Slowest)"]
+        ]
+        msg = await _mg_ask(bot, uid,
+            "<b>Step 5b/9:</b> Choose <b>playback speed</b>:",
+            reply_markup=ReplyKeyboardMarkup(speed_kb, resize_keyboard=True, one_time_keyboard=True))
+        speed = 1.0
+        if msg.text:
+            m = re.search(r'([0-9.]+)x', msg.text)
+            if m:
+                try: speed = float(m.group(1))
+                except: speed = 1.0
+        speed = max(0.5, min(speed, 2.5))
+
         # Step 6: Metadata
         msg = await _mg_ask(bot, uid,
             "<b>Step 6/7:</b> Send <b>metadata</b> (one per line)\n\n"
@@ -1086,12 +1130,12 @@ async def _create_flow(bot, uid, mtype="audio"):
                     k = k.strip().lower(); v = v.strip()
                     if k and v: metadata[kmap.get(k,k)] = v
 
-        # Step 6b: Cover
+        # Step 6b: Audio Cover (for MP3 ID3 tag)
         cover_path = None
         msg = await _mg_ask(bot, uid,
-            "<b>Step 6b:</b> Send <b>cover image</b> (photo/file)\n\n"
-            "Send <code>skip</code> for no cover.")
-        tmp_dir = f"merge_tmp/_cover_{uid}"
+            "<b>Step 6b/9:</b> Send <b>audio cover image</b> (embedded in MP3 ID3 tag)\n\n"
+            "Send <code>skip</code> for no cover art.")
+        tmp_dir = os.path.abspath(f"merge_tmp/_cover_{uid}")
         os.makedirs(tmp_dir, exist_ok=True)
         if msg.photo:
             try: cover_path = await bot.download_media(msg, file_name=os.path.join(tmp_dir, "cover.jpg"))
@@ -1099,23 +1143,45 @@ async def _create_flow(bot, uid, mtype="audio"):
         elif msg.document and msg.document.mime_type and 'image' in msg.document.mime_type:
             try: cover_path = await bot.download_media(msg, file_name=os.path.join(tmp_dir, "cover.jpg"))
             except: pass
+        if cover_path: cover_path = os.path.abspath(cover_path)
 
         # Step 6c: Make Video?
         make_video = False
         upload_to_yt = False
-        if cover_path and mtype == "audio":
+        video_cover_path = None
+        if mtype == "audio":
             msg = await _mg_ask(bot, uid,
-                "<b>Step 6c:</b> Create an <b>MP4 Video</b> from this audio using the cover image? (Uses very little RAM)\n\n"
-                "Send <code>yes</code> to build a video, or <code>skip</code> to just embed the image as MP3 cover art.")
+                "<b>Step 6c/9:</b> Create an <b>MP4 Video</b> (audio + 1080p image)?\n\n"
+                "Send <code>yes</code> to build a video file, or <code>skip</code> for MP3 only.")
             if "yes" in (msg.text or "").lower():
                 make_video = True
                 
-            # Step 6d: YouTube Upload?
-            if make_video:
+                # Step 6d: Video Cover Image (separate from MP3 cover)
                 msg = await _mg_ask(bot, uid,
-                    "<b>Step 6d:</b> Auto-Upload this video directly to <b>YouTube</b>?\n\n"
-                    "<i>(Requires running /ytauth first to link your channel)</i>\n\n"
-                    "Send <code>yes</code> to upload, or <code>skip</code> for Telegram only.")
+                    "<b>Step 6d/9:</b> Send the <b>1080p image</b> to use as the video background.\n\n"
+                    "<i>(This is separate from the MP3 cover art — send a high-resolution image)</i>\n\n"
+                    "Send <code>skip</code> to use the same image as MP3 cover.")
+                tmp_vdir = os.path.abspath(f"merge_tmp/_vcover_{uid}")
+                os.makedirs(tmp_vdir, exist_ok=True)
+                if msg.photo:
+                    try:
+                        video_cover_path = await bot.download_media(msg, file_name=os.path.join(tmp_vdir, "video_cover.jpg"))
+                        video_cover_path = os.path.abspath(video_cover_path)
+                    except: pass
+                elif msg.document and msg.document.mime_type and 'image' in msg.document.mime_type:
+                    try:
+                        video_cover_path = await bot.download_media(msg, file_name=os.path.join(tmp_vdir, "video_cover.jpg"))
+                        video_cover_path = os.path.abspath(video_cover_path)
+                    except: pass
+                # Fall back to audio cover if no video cover sent
+                if not video_cover_path:
+                    video_cover_path = cover_path
+
+                # Step 6e: YouTube Upload?
+                msg = await _mg_ask(bot, uid,
+                    "<b>Step 6e/9:</b> Auto-Upload to <b>YouTube</b> after rendering?\n\n"
+                    "<i>(Requires /ytauth setup first)</i>\n\n"
+                    "Send <code>yes</code> or <code>skip</code>.")
                 if "yes" in (msg.text or "").lower():
                     upload_to_yt = True
 
@@ -1126,6 +1192,8 @@ async def _create_flow(bot, uid, mtype="audio"):
             dest_preview = ", ".join(names)
 
         meta_pre = "\n".join(f"  {k}: {v}" for k,v in list(metadata.items())[:5] if v) if metadata else ""
+        vc_label = ("✅ Separate 1080p image" if (video_cover_path and video_cover_path != cover_path)
+                    else ("✅ Same as audio cover" if make_video and cover_path else "❌"))
 
         msg = await _mg_ask(bot, uid,
             f"<b>Step 7: Confirm {label} Merge</b>\n\n"
@@ -1133,8 +1201,10 @@ async def _create_flow(bot, uid, mtype="audio"):
             f"<b>Range:</b> {sid} → {eid} ({total} msgs)\n"
             f"<b>Output:</b> <code>{out_name}</code>\n"
             f"<b>Type:</b> {icon} {label}\n"
-            f"<b>Cover:</b> {'✅' if cover_path else '❌'}\n"
+            f"<b>Speed:</b> {speed}x\n"
+            f"<b>Audio Cover:</b> {'✅' if cover_path else '❌'}\n"
             f"<b>Make MP4 Video:</b> {'✅' if make_video else '❌'}\n"
+            f"<b>Video Image:</b> {vc_label}\n"
             f"<b>Upload to YT:</b> {'✅' if upload_to_yt else '❌'}\n"
             f"<b>Dest:</b> {dest_preview}\n"
             + (f"\n<b>Metadata:</b>\n{meta_pre}\n" if meta_pre else "") +
@@ -1144,25 +1214,43 @@ async def _create_flow(bot, uid, mtype="audio"):
                 resize_keyboard=True, one_time_keyboard=True))
 
         if not msg.text or "Cancel" in msg.text:
-            if os.path.exists(tmp_dir): shutil.rmtree(tmp_dir, ignore_errors=True)
+            try: shutil.rmtree(tmp_dir, ignore_errors=True)
+            except: pass
+            if video_cover_path and video_cover_path != cover_path:
+                try: shutil.rmtree(os.path.dirname(str(video_cover_path)), ignore_errors=True)
+                except: pass
             return await bot.send_message(uid, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
 
         # Create job
         jid = str(uuid.uuid4())
-        real_dir = f"merge_tmp/{jid}"
+        real_dir = os.path.abspath(f"merge_tmp/{jid}")
         os.makedirs(real_dir, exist_ok=True)
-        if cover_path and os.path.exists(cover_path):
-            new_cover = os.path.join(real_dir, "cover.jpg")
-            shutil.copy2(cover_path, new_cover)
-        if os.path.exists(tmp_dir): shutil.rmtree(tmp_dir, ignore_errors=True)
+        
+        # Copy audio cover
+        if cover_path and os.path.exists(str(cover_path)):
+            shutil.copy2(str(cover_path), os.path.join(real_dir, "cover.jpg"))
+        
+        # Copy video cover (separate image for video rendering)
+        has_video_cover = False
+        if video_cover_path and os.path.exists(str(video_cover_path)):
+            shutil.copy2(str(video_cover_path), os.path.join(real_dir, "video_cover.jpg"))
+            has_video_cover = True
+        
+        # Clean up temp dirs
+        try: shutil.rmtree(tmp_dir, ignore_errors=True)
+        except: pass
+        if video_cover_path and video_cover_path != cover_path:
+            try: shutil.rmtree(os.path.abspath(os.path.dirname(str(video_cover_path))), ignore_errors=True)
+            except: pass
 
         job = {
             "job_id": jid, "user_id": uid, "account_id": acc["id"],
             "from_chat": from_chat, "start_id": sid, "end_id": eid,
             "current_id": sid, "output_name": out_name, "merge_type": mtype,
             "metadata": metadata, "dest_chats": dest_chats,
-            "has_cover": bool(cover_path), "name": out_name,
-            "status": "downloading", "downloaded": 0,
+            "has_cover": bool(cover_path), "has_video_cover": has_video_cover,
+            "speed": speed, "make_video": make_video, "upload_to_yt": upload_to_yt,
+            "name": out_name, "status": "downloading", "downloaded": 0,
             "total_dl_bytes": 0, "error": "", "created_at": time.time(),
         }
         await _db_save(job)
