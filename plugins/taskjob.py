@@ -157,9 +157,7 @@ async def _send_one(client, msg, to_chat: int, remove_caption: bool, caption_tpl
 
     caption = None
     if msg.media:
-        caption = custom_caption(msg, caption_tpl)
-        if remove_caption:
-            caption = ""
+        caption = custom_caption(msg, caption_tpl, apply_smart_clean=remove_caption)
 
     kw = {"message_thread_id": thread_id} if thread_id else {}
     if caption is not None:

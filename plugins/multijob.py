@@ -142,9 +142,7 @@ async def _mj_forward(
     is_text_replaced = False
 
     if msg.media:
-        new_caption = custom_caption(msg, cap_tpl)
-        if remove_caption:
-            new_caption = ""
+        new_caption = custom_caption(msg, cap_tpl, apply_smart_clean=remove_caption)
             
         if replacements and new_caption:
             for old_txt, new_txt_str in replacements.items():

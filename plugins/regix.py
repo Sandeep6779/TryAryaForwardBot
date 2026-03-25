@@ -301,9 +301,7 @@ async def pub_(bot, message):
 
                 # Compute caption & replacements for this message before buffering
                 _filters = data.get('filters', [])
-                new_caption = custom_caption(message, caption)
-                if (message.audio or message.video or message.photo or message.document) and data.get('rm_caption'):
-                    new_caption = ""
+                new_caption = custom_caption(message, caption, apply_smart_clean=data.get('rm_caption', False))
 
                 replacements = data.get('replacements', {})
                 if replacements and new_caption:
@@ -638,7 +636,31 @@ async def send(bot, user, text):
    except:
       pass 
      
-def custom_caption(msg, caption):
+import re
+
+def smart_clean_caption(caption: str) -> str:
+    if not caption:
+        return ""
+    
+    # Try to extract the title up to the resolution tag
+    match = re.search(r'^.*?(?:480p|720p|1080p|1440p|2160p|4k|8k)(?:\.|\s|$)', caption, flags=re.IGNORECASE | re.MULTILINE)
+    if match:
+        cleaned = match.group(0)
+    else:
+        cleaned = caption
+        
+    # Remove file extensions
+    cleaned = re.sub(r'(?i)(\.mkv|\.mp4|\.avi|\.webm|\.flv).*$', '', cleaned)
+    # Remove Telegram promotional links
+    cleaned = re.sub(r'(?i)(⚡️.*?Join Us.*|@\w+).*$', '', cleaned)
+    # Remove typical junk release tags if no resolution was matched and it's long
+    if not match:
+        cleaned = re.sub(r'(?i)(\.WEB-DL|\.HINDI|\.AAC|\.H\.264|\.x264).*$', '', cleaned)
+        cleaned = re.sub(r'(-[a-zA-Z0-9_]+)$', '', cleaned)
+        
+    return cleaned.strip()
+
+def custom_caption(msg, caption, apply_smart_clean=False):
   if msg.media:
     if (msg.video or msg.document or msg.audio or msg.photo):
       media = getattr(msg, msg.media.value, None)
@@ -648,9 +670,16 @@ def custom_caption(msg, caption):
         fcaption = getattr(msg, 'caption', '')
         if fcaption:
           fcaption = fcaption.html
-        if caption:
+          
+        if apply_smart_clean:
+            fcaption = smart_clean_caption(fcaption)
+        elif apply_smart_clean is False:
+            # Normal mode behavior: send NO caption
+            fcaption = ""
+            
+        if caption and fcaption:
           return caption.format(filename=file_name, size=get_size(file_size), caption=fcaption)
-        return fcaption
+        return fcaption if fcaption else None
   return None
 
 def get_size(size):
