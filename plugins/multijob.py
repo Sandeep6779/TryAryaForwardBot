@@ -917,7 +917,7 @@ async def _create_mj_flow(bot, user_id: int):
         user_id,
         f"<b>✅ Multi Job Created & Started!</b>\n\n"
         f"⚡ <b>{from_title}</b> → <b>{to_title}</b>{thread_lbl}\n"
-        f"<b>Account:</b> {'\U0001f916 Bot' if is_bot else '\U0001f464 Userbot'}: {sel_acc.get('name','?')}\n"
+        f"<b>Account:</b> {'🤖 Bot' if is_bot else '👤 Userbot'}: {sel_acc.get('name','?')}\n"
         f"<b>Range:</b> From ID <code>{start_id}</code> · {end_lbl}\n"
         f"<b>Job ID:</b> <code>{job_id[-6:]}</code>\n\n"
         f"<i>Running in background.\nUse /multijob to manage.</i>",
