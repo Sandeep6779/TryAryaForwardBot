@@ -748,14 +748,51 @@ async def _run_job(jid, uid, bot):
                 from plugins.youtube import upload_video_to_youtube
                 yt_status = await bot.send_message(uid, f"<b>⬆️ Uploading to YouTube...</b>\n<i>Please wait, large files take time.</i>")
                 
-                title = metadata.get("title") or getattr(metadata, "artist", "") or f"{out_name}"
-                desc = f"Auto-Generated Merge\n\nTotal Parts: {global_seq}\nSpeed: {speed}x\nFile Size: {_sz(fsize)}"
+                yt_title_custom = job.get("yt_title")
+                title = yt_title_custom or metadata.get("title") or getattr(metadata, "artist", "") or f"{out_name}"
+                title = title[:100] # YouTube limit
+                
+                yt_thumb_custom = None
+                if job.get("has_yt_thumb"):
+                    _ytp = os.path.abspath(os.path.join(wdir, "yt_thumb.jpg"))
+                    if os.path.exists(_ytp): yt_thumb_custom = _ytp
+                
+                start_epi = job.get("yt_start_epi")
+                
+                yt_timestamps = ""
+                last_epi = None
+                import re
+                
+                for tc, original_name, _ in log_entries:
+                    numbers = re.findall(r'\d+', str(original_name))
+                    epi_num = int(numbers[-1]) if numbers else None
+                    
+                    if epi_num is not None:
+                        if start_epi is not None and last_epi is None:
+                            last_epi = start_epi - 1
+                        
+                        if last_epi is not None and epi_num > last_epi + 1:
+                            for missing in range(int(last_epi) + 1, int(epi_num)):
+                                yt_timestamps += f"{tc} Episode {missing}\n"
+                        yt_timestamps += f"{tc} Episode {epi_num}\n"
+                        last_epi = epi_num
+                    else:
+                        fallback_epi = (int(last_epi) + 1) if last_epi is not None else (int(start_epi) if start_epi is not None else 1)
+                        yt_timestamps += f"{tc} Episode {fallback_epi}\n"
+                        last_epi = fallback_epi
+
+                desc_hindi = f"हे अजनबियों, मैं आर्य बॉट [आपका दोस्त] हूँ। मैंने सफलतापूर्वक '{title}' को 'The Last Broadcast' पर मर्ज और अपलोड कर दिया है। मैंने इसे अपने टेलीग्राम डेटाबेस से एकत्र किया है और इसे [1-{last_epi or global_seq}] के उसी क्रम में मर्ज/अपलोड किया है।\n\nचूंकि यह एक स्वचालित प्रक्रिया है, इसलिए आपको कुछ समस्याएं मिल सकती हैं—जैसे एपिसोड के क्रम में गड़बड़ी (जैसे कि एपिसोड 11, 10 से पहले), कुछ एपिसोड का छूटना, थोड़ी गुणवत्ता में कमी या अन्य असंगतताएं। यदि आपको कोई समस्या आती है, तो आप टिप्पणियों में रिपोर्ट कर सकते हैं। बेहतर सुविधा के लिए, टाइमस्टैम्प नीचे दिए गए हैं ताकि आप आसानी से एपिसोड के बीच नेविगेट कर सकें।"
+
+                desc_english = f"Hey Strangers, I'm Arya Bot [Your Friend]. I successfully merged and uploaded '{title}' on The Last Broadcast. I collected this from my Telegram database and merged/uploaded it in the same order [1-{last_epi or global_seq}].\n\nYou may notice some issues such as episode order mismatches (e.g., episode 11 before 10), missing episodes, slight quality loss, or other inconsistencies. If you face issues, you can report them in the comments. Since this is an automated process, some limitations may exist. For better navigation, timestamps are provided below so you can jump between episodes easily."
+
+                desc = f"{desc_hindi}\n\n───────────────────────────\n\n{desc_english}\n\n⏱ **TIMESTAMPS / CHAPTERS** ⏱\n{yt_timestamps}"
                 
                 success, yt_res = await upload_video_to_youtube(
                     video_path=out_path,
                     title=title,
                     description=desc,
-                    privacy_status="private"
+                    privacy_status="private",
+                    thumbnail_path=yt_thumb_custom
                 )
                 
                 if success:
@@ -1212,7 +1249,11 @@ async def _create_flow(bot, uid, mtype="audio"):
         # Step 6c: Make Video?
         make_video = False
         upload_to_yt = False
+        yt_title = None
+        yt_thumb_path = None
+        yt_start_epi = None
         video_cover_path = None
+        outro_cover_path = None
         if mtype == "audio":
             msg = await _mg_ask(bot, uid,
                 "<b>Step 6c/9:</b> Create an <b>MP4 Video</b> (audio + 1080p image)?\n\n"
@@ -1267,6 +1308,36 @@ async def _create_flow(bot, uid, mtype="audio"):
                 if "yes" in (msg.text or "").lower():
                     upload_to_yt = True
 
+                    # Step 6g: YouTube Title
+                    msg = await _mg_ask(bot, uid,
+                        "<b>Step 6g/9:</b> Enter specific <b>YouTube Title</b>:\n\n"
+                        "Send <code>skip</code> to use bot default.")
+                    yt_title = msg.text.strip() if msg.text.lower() != "skip" else None
+
+                    # Step 6h: YouTube Thumbnail
+                    msg = await _mg_ask(bot, uid,
+                        "<b>Step 6h/9:</b> Send custom <b>YouTube Thumbnail</b> image:\n\n"
+                        "Send <code>skip</code> for none.")
+                    tmp_tdir = os.path.abspath(f"merge_tmp/_ythumb_{uid}")
+                    os.makedirs(tmp_tdir, exist_ok=True)
+                    if msg.photo:
+                        try:
+                            yt_thumb_path = await bot.download_media(msg, file_name=os.path.join(tmp_tdir, "yt_thumb.jpg"))
+                            yt_thumb_path = os.path.abspath(yt_thumb_path)
+                        except: pass
+                    elif msg.document and msg.document.mime_type and 'image' in msg.document.mime_type:
+                        try:
+                            yt_thumb_path = await bot.download_media(msg, file_name=os.path.join(tmp_tdir, "yt_thumb.jpg"))
+                            yt_thumb_path = os.path.abspath(yt_thumb_path)
+                        except: pass
+
+                    # Step 6i: Starting Episode
+                    msg = await _mg_ask(bot, uid,
+                        "<b>Step 6i/9:</b> Enter <b>Starting Episode Number</b> for Timestamps (e.g. 1 or 201).\n\n"
+                        "Send <code>skip</code> to assume 1.")
+                    if msg.text.lower() != "skip" and msg.text.strip().isdigit():
+                        yt_start_epi = int(msg.text.strip())
+
         # Step 7: Confirm
         dest_preview = "DM only"
         if dest_chats:
@@ -1289,7 +1360,9 @@ async def _create_flow(bot, uid, mtype="audio"):
             f"<b>Video Image:</b> {vc_label}\n"
             f"<b>Outro Image:</b> {'✅' if outro_cover_path else '❌'}\n"
             f"<b>Upload to YT:</b> {'✅ Private' if upload_to_yt else '❌'}\n"
-            f"<b>Dest:</b> {dest_preview}\n"
+            + (f"<b>YT Title:</b> {yt_title[:20]+'...' if len(yt_title)>20 else yt_title}\n" if yt_title else "")
+            + (f"<b>YT Thumb:</b> {'✅' if yt_thumb_path else '❌'}\n" if upload_to_yt else "")
+            + f"<b>Dest:</b> {dest_preview}\n"
             + (f"\n<b>Metadata:</b>\n{meta_pre}\n" if meta_pre else "") +
             f"\n<i>All media merged in exact order. No file skipped.</i>",
             reply_markup=ReplyKeyboardMarkup(
@@ -1319,11 +1392,23 @@ async def _create_flow(bot, uid, mtype="audio"):
             shutil.copy2(str(video_cover_path), os.path.join(real_dir, "video_cover.jpg"))
             has_video_cover = True
         
+        if outro_cover_path and os.path.exists(str(outro_cover_path)):
+            shutil.copy2(str(outro_cover_path), os.path.join(real_dir, "outro_cover.jpg"))
+            
+        if yt_thumb_path and os.path.exists(str(yt_thumb_path)):
+            shutil.copy2(str(yt_thumb_path), os.path.join(real_dir, "yt_thumb.jpg"))
+        
         # Clean up temp dirs
         try: shutil.rmtree(tmp_dir, ignore_errors=True)
         except: pass
         if video_cover_path and video_cover_path != cover_path:
             try: shutil.rmtree(os.path.abspath(os.path.dirname(str(video_cover_path))), ignore_errors=True)
+            except: pass
+        if outro_cover_path:
+            try: shutil.rmtree(os.path.abspath(os.path.dirname(str(outro_cover_path))), ignore_errors=True)
+            except: pass
+        if yt_thumb_path:
+            try: shutil.rmtree(os.path.abspath(os.path.dirname(str(yt_thumb_path))), ignore_errors=True)
             except: pass
 
         job = {
@@ -1332,7 +1417,10 @@ async def _create_flow(bot, uid, mtype="audio"):
             "current_id": sid, "output_name": out_name, "merge_type": mtype,
             "metadata": metadata, "dest_chats": dest_chats,
             "has_cover": bool(cover_path), "has_video_cover": has_video_cover,
-            "speed": speed, "make_video": make_video, "upload_to_yt": upload_to_yt,
+            "has_outro_cover": bool(outro_cover_path),
+            "speed": speed, "make_video": make_video,
+            "upload_to_yt": upload_to_yt, "yt_title": yt_title,
+            "has_yt_thumb": bool(yt_thumb_path), "yt_start_epi": yt_start_epi,
             "name": out_name, "status": "downloading", "downloaded": 0,
             "total_dl_bytes": 0, "error": "", "created_at": time.time(),
         }

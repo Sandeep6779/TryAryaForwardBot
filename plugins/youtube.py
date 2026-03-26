@@ -46,7 +46,7 @@ def get_authenticated_service():
             return None
     return build('youtube', 'v3', credentials=creds)
 
-async def upload_video_to_youtube(video_path, title, description="", tags=None, category_id="22", privacy_status="private"):
+async def upload_video_to_youtube(video_path, title, description="", tags=None, category_id="22", privacy_status="private", thumbnail_path=None):
     try:
         import asyncio
         youtube = get_authenticated_service()
@@ -75,10 +75,22 @@ async def upload_video_to_youtube(video_path, title, description="", tags=None, 
 
         loop = asyncio.get_event_loop()
         response = await loop.run_in_executor(None, request.execute)
-        return True, f"https://youtu.be/{response['id']}"
+        
+        video_id = response['id']
+
+        if thumbnail_path and os.path.exists(thumbnail_path):
+            try:
+                thumb_media = MediaFileUpload(thumbnail_path, mimetype='image/jpeg')
+                thumb_request = youtube.thumbnails().set(videoId=video_id, media_body=thumb_media)
+                await loop.run_in_executor(None, thumb_request.execute)
+            except Exception as e:
+                logger.warning(f"YouTube Thumbnail Upload Failed: {e}")
+
+        return True, f"https://youtu.be/{video_id}"
     except Exception as e:
         logger.error(f"YouTube Upload Failed: {e}")
         return False, str(e)
+
 
 # Simple Auth Command (Requires bot admin to do it usually, so we'll check it's admin/owner)
 _flows_cache = {}
