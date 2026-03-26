@@ -704,6 +704,33 @@ async def _run_job(jid, uid, bot):
                     caption=f"<b>📋 Processing Log</b>\n{out_name}")
             except: pass
 
+        # ── Phase 4: YouTube Upload ───────────────────────────────────────
+        yt_msg = ""
+        if upload_to_yt:
+            try:
+                from plugins.youtube import upload_video_to_youtube
+                yt_status = await bot.send_message(uid, f"<b>⬆️ Uploading to YouTube...</b>\n<i>Please wait, large files take time.</i>")
+                
+                title = metadata.get("title") or getattr(metadata, "artist", "") or f"{out_name}"
+                desc = f"Auto-Generated Merge\n\nTotal Parts: {global_seq}\nSpeed: {speed}x\nFile Size: {_sz(fsize)}"
+                
+                success, yt_res = await upload_video_to_youtube(
+                    video_path=out_path,
+                    title=title,
+                    description=desc,
+                    privacy_status="private"
+                )
+                
+                if success:
+                    yt_msg = f"┃ 🟥 YouTube: <a href='{yt_res}'>Private Link</a>\n"
+                    await yt_status.edit_text(f"<b>✅ YouTube Upload Successful!</b>\n{yt_res}")
+                else:
+                    yt_msg = f"┃ 🟥 YouTube: Failed\n"
+                    await yt_status.edit_text(f"<b>❌ YouTube Upload Failed</b>\n<code>{yt_res}</code>")
+            except Exception as e:
+                logger.error(f"YouTube exception: {e}")
+                yt_msg = f"┃ 🟥 YouTube: Error\n"
+
         total_time = up_time
         await _db_up(jid, status="done", total_time=total_time, file_size=fsize)
 
@@ -716,7 +743,8 @@ async def _run_job(jid, uid, bot):
                 f"┃ 💾 {_sz(fsize)}\n"
                 f"┃ ⚡ Speed: {speed}x\n"
                 f"┃ ⬆️ Upload: {_tm(up_time)}\n"
-                f"┃ ⏱ Total parts: {total_chunks}\n"
+                f"┃ ⏱ Total chunks: {total_chunks}\n"
+                f"{yt_msg}"
                 f"╰─────────────╯")
         except: pass
 
