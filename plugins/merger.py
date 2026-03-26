@@ -179,7 +179,7 @@ def _build_atempo_chain(speed):
     return ",".join(filters) if filters else ""
 
 
-def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=None, speed=1.0, make_video=False):
+def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=None, speed=1.0, make_video=False, video_cover=None):
     """Merge file_list → output_path. Tries lossless copy first, falls back to re-encode.
     make_video: If True and cover is present, creates an MP4 video out of the merged audio and cover image.
     speed: 1.0 = normal, 2.5 = 2.5x faster.
@@ -358,9 +358,13 @@ async def _run_job(jid, uid, bot):
 
         est_size, media_count = await _scan_total_size(client, from_chat, start_id, end_id)
 
-        if est_size > MAX_TOTAL_GB * 1024**3:
-            msg = (f"<b>❌ Pre-scan failed — total estimated size is {_sz(est_size)}, "
-                   f"which exceeds the {MAX_TOTAL_GB:.0f}GB limit.</b>\n\n"
+        MAX_TOTAL_GB = 4.0
+        MAX_FILES = 50
+
+        if est_size > MAX_TOTAL_GB * 1024**3 or media_count > MAX_FILES:
+            msg = (f"<b>❌ Pre-scan blocked your request:</b>\n"
+                   f"Found {media_count} files ({_sz(est_size)}).\n\n"
+                   f"Server limit is {MAX_FILES} files and {MAX_TOTAL_GB:.0f}GB per merge to prevent Out of Memory errors. "
                    f"Please select a smaller range and try again.")
             await _db_up(jid, status="error", error=msg)
             try:
@@ -1052,13 +1056,7 @@ async def _create_flow(bot, uid, mtype="audio"):
         if sid > eid: sid, eid = eid, sid
         total = eid - sid + 1
 
-        # Hard limit to prevent RAM exhaustion
-        if total > 120:
-            return await bot.send_message(uid, 
-                f"<b>❌ Too many files ({total}).</b>\n\n"
-                f"To prevent server crashes, maximum allowed is <b>120 files</b> per merge. "
-                f"Please split your request into smaller ranges.",
-                reply_markup=ReplyKeyboardRemove())
+        # Size validation is now properly handled by _scan_total_size phase checking actual files
 
         # Step 4: Destination
         channels = await db.get_user_channels(uid)

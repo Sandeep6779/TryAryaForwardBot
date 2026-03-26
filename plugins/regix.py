@@ -663,28 +663,42 @@ def smart_clean_caption(caption: str) -> str:
     return cleaned.strip()
 
 def custom_caption(msg, caption, apply_smart_clean=False):
-  if msg.media:
-    if (msg.video or msg.document or msg.audio or msg.photo):
-      media = getattr(msg, msg.media.value, None)
-      if media:
-        file_name = getattr(media, 'file_name', '')
-        file_size = getattr(media, 'file_size', '')
-        fcaption = getattr(msg, 'caption', '')
-        if fcaption:
-          fcaption = fcaption.html
-          
-        if apply_smart_clean is True:
-            fcaption = smart_clean_caption(fcaption)
-        elif apply_smart_clean is False:
-            # Normal mode behavior: send NO caption
-            fcaption = ""
-        elif apply_smart_clean == 2:
-            pass  # Keep original unmodified caption exactly as it is
-            
-        if caption and fcaption:
+  if not msg.media: return None
+  if not (msg.video or msg.document or msg.audio or msg.photo): return None
+  
+  media = getattr(msg, msg.media.value, None)
+  if not media: return None
+  
+  file_name = getattr(media, 'file_name', '')
+  file_size = getattr(media, 'file_size', 0)
+  
+  fcaption = getattr(msg, 'caption', '')
+  if fcaption: fcaption = fcaption.html
+  
+  if apply_smart_clean is True:
+      # User wants to REMOVE caption. Block it completely.
+      fcaption = ""
+  elif apply_smart_clean is False:
+      # User wants to KEEP caption. Leave as is.
+      pass
+  elif apply_smart_clean == 2:
+      # Strict original mode
+      pass
+
+  # If an explicit custom template exists, format it
+  if caption:
+      # Using format carefully in case template uses generic syntax
+      try:
           return caption.format(filename=file_name, size=get_size(file_size), caption=fcaption)
-        return fcaption if fcaption else None
-  return None
+      except:
+          return caption  # Fallback if bad format
+          
+  # No template provided
+  if apply_smart_clean is True:
+      # return "" so Pyrogram actually overrides the original caption with nothing
+      return ""
+  else:
+      return None  # None tells Pyrogram to keep the original untouched
 
 def get_size(size):
   units = ["Bytes", "KB", "MB", "GB", "TB", "PB", "EB"]
