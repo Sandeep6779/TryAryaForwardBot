@@ -126,7 +126,10 @@ def _ist_now() -> datetime.datetime:
 def _ist_str(fmt='%d %b %Y %I:%M:%S %p IST') -> str:
     return _ist_now().strftime(fmt)
 
-def _build_info_text(job: dict, now_ts: float | None = None) -> str:
+from typing import Optional
+
+
+def _build_info_text(job: dict, now_ts: Optional[float] = None) -> str:
     """Build the premium info panel text for a merge job."""
     if now_ts is None:
         now_ts = time.time()
