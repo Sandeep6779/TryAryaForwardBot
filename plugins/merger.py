@@ -23,7 +23,7 @@ import subprocess
 import datetime
 from database import db
 from .test import CLIENT, start_clone_bot
-from pyrogram import Client, filters
+from pyrogram import Client, filters, ContinuePropagation
 from pyrogram.errors import FloodWait
 from pyrogram.types import (
     InlineKeyboardButton, InlineKeyboardMarkup,
@@ -48,6 +48,7 @@ async def _mg_input_router(bot, message):
         fut = _mg_waiter.pop(uid)
         if not fut.done():
             fut.set_result(message)
+    raise ContinuePropagation
 
 
 async def _mg_ask(bot, user_id, text, reply_markup=None, timeout=300):
