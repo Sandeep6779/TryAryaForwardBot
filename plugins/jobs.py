@@ -221,6 +221,8 @@ async def _forward_message(
                     await client.forward_messages(chat_id=chat, from_chat_id=msg.chat.id, message_ids=msg.id, **kw)
                 else:
                     if is_text_replaced and not msg.media:
+                        if not new_text or not new_text.strip():
+                            return True # Silently skip since it's an empty text msg after stripping
                         await client.send_message(chat_id=chat, text=new_text, **kw)
                     else:
                         await client.copy_message(chat_id=chat, from_chat_id=msg.chat.id, message_id=msg.id, **kw)
@@ -289,6 +291,8 @@ async def _forward_message(
                     if os.path.exists(fp): os.remove(fp)
                     return True
                 else:
+                    if not new_text or not new_text.strip():
+                        return True
                     await client.send_message(chat_id=chat, text=new_text if new_text is not None else getattr(msg.text, "html", str(msg.text)) if msg.text else "", **kw)
                     return True
             except FloodWait as fw:
