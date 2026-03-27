@@ -786,10 +786,12 @@ async def _run_job(jid, uid, bot):
                 desc_english = f"Hey Strangers, I'm Arya Bot [Your Friend]. I successfully merged and uploaded '{title}' on The Last Broadcast. I collected this from my Telegram database and merged/uploaded it in the same order [1-{last_epi or global_seq}].\n\nYou may notice some issues such as episode order mismatches (e.g., episode 11 before 10), missing episodes, slight quality loss, or other inconsistencies. If you face issues, you can report them in the comments. Since this is an automated process, some limitations may exist. For better navigation, timestamps are provided below so you can jump between episodes easily."
 
                 support_msg = "If my work has helped you in any way, you can support me as per your wish by visiting this link: https://razorpay.me/@SusJeetX and sending any amount (minimum 50 INR). This will help me continue providing more stories like this."
-                copyright_msg = "Warning: Copyright issues may occur at any time. Join my Telegram channel: https://t.me/StoriesByJeetXNew to get all stories and updates about the new YouTube channel, so you don't miss any content."
+                support_msg_hi = "यदि मेरे कार्य से आपको किसी भी प्रकार की सहायता मिली है, तो आप इस लिंक पर जाकर अपनी इच्छानुसार मुझे समर्थन दे सकते हैं: https://razorpay.me/@SusJeetX और कोई भी राशि (न्यूनतम 50 INR) भेज सकते हैं। इससे मुझे इस तरह की और कहानियाँ प्रदान करने में मदद मिलेगी।"
 
-                desc = f"{desc_hindi}\n\n───────────────────────────\n\n{desc_english}\n\n{support_msg}\n\n{copyright_msg}\n\n───────────────────────────\n\n⏱ **TIMESTAMPS / CHAPTERS** ⏱\n{yt_timestamps}"
-                
+                copyright_msg = "Warning: Copyright issues may occur at any time. Join my Telegram channel: https://t.me/StoriesByJeetXNew to get all stories and updates about the new YouTube channel, so you don't miss any content."
+                copyright_msg_hi = "चेतावनी: किसी भी समय कॉपीराइट की समस्या आ सकती है। मेरे टेलीग्राम चैनल: https://t.me/StoriesByJeetXNew से जुड़ें ताकि आपको सभी कहानियाँ और नए YouTube चैनल के बारे में अपडेट मिलते रहें, और आप कोई भी सामग्री मिस न करें।"
+
+                desc = f"{desc_hindi}\n\n{support_msg_hi}\n\n{copyright_msg_hi}\n\n───────────────────────────\n\n{desc_english}\n\n{support_msg}\n\n{copyright_msg}\n\n───────────────────────────\n\n⏱ **TIMESTAMPS / CHAPTERS** ⏱\n\n{yt_timestamps}"
                 success, yt_res = await upload_video_to_youtube(
                     video_path=out_path,
                     title=title,

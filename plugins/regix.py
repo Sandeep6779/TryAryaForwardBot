@@ -206,7 +206,7 @@ async def pub_(bot, message):
                       # This is the ONLY way to guarantee ordering for copy_message.
                       # The pipeline approach (task_queue + workers) inherently races
                       # even with a sequence-buffer in the uploader.
-                      details = {"msg_id": message.id, "media": media(message), "caption": new_caption, 'button': button, "protect": protect, "text": message.text.html if message.text else ""}
+                      details = {"msg_id": message.id, "media": media(message), "caption": new_caption, 'button': button, "protect": protect, "text": getattr(message.text, "html", str(message.text)) if message.text else ""}
                       
                       if download_mode:
                           # Download mode: use the worker pipeline (slow, benefits from async)
@@ -741,7 +741,7 @@ def smart_clean_caption(caption: str) -> str:
     if not caption:
         return ""
     
-    cleaned = caption
+    cleaned = str(caption)
     # Remove common audio/video codecs and group tags attached to the extension
     cleaned = re.sub(r'(?i)(AAC[0-9.]*|H\.?264|H\.?265|x264|x265|HEVC).*?(\.mkv|\.mp4|\.avi|\.webm|\.flv)', '', cleaned)
     # Remove isolated extensions
@@ -777,7 +777,7 @@ def custom_caption(msg, caption, apply_smart_clean=False, remove_links_flag=Fals
   file_size = getattr(media, 'file_size', 0)
   
   fcaption = getattr(msg, 'caption', '')
-  if fcaption: fcaption = fcaption.html
+  if fcaption: fcaption = getattr(fcaption, 'html', str(fcaption))
   
   if apply_smart_clean == 2:
       # Wipe All Captions. Block it completely.

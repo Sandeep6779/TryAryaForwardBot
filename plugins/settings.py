@@ -266,7 +266,13 @@ async def settings_query(bot, query):
          val = True
      else:
          val = 2  # wipe
-     await update_configs(user_id, 'rm_caption', val)
+         
+     # Update inside filters dict appropriately
+     data = await get_configs(user_id)
+     filters_dict = data.get('filters', {})
+     filters_dict['rm_caption'] = val
+     await update_configs(user_id, 'filters', filters_dict)
+     
      await query.answer("✅ Caption mode updated!", show_alert=False)
      # Refresh the caption sub-menu
      data    = await get_configs(user_id)

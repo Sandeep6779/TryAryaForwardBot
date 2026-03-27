@@ -186,7 +186,7 @@ async def _forward_message(
                 try: new_caption = re.sub(str(old_txt), new_str, str(new_caption), flags=re.IGNORECASE)
                 except Exception: new_caption = str(new_caption).replace(str(old_txt), new_str)
     else:
-        new_text = msg.text.html if msg.text else ""
+        new_text = getattr(msg.text, "html", str(msg.text)) if msg.text else ""
         if remove_links_flag and new_text:
             new_text = remove_all_links(new_text)
             is_text_replaced = True
@@ -282,7 +282,7 @@ async def _forward_message(
                     if os.path.exists(fp): os.remove(fp)
                     return True
                 else:
-                    await client.send_message(chat_id=chat, text=new_text if new_text is not None else (msg.text.html if msg.text else ""), **kw)
+                    await client.send_message(chat_id=chat, text=new_text if new_text is not None else getattr(msg.text, "html", str(msg.text)) if msg.text else "", **kw)
                     return True
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 2)

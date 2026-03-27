@@ -163,7 +163,7 @@ async def _mj_forward(
                 try: new_caption = re.sub(str(old_txt), new_str, str(new_caption), flags=re.IGNORECASE)
                 except Exception: new_caption = str(new_caption).replace(str(old_txt), new_str)
     else:
-        new_text = msg.text.html if msg.text else ""
+        new_text = getattr(msg.text, "html", str(msg.text)) if msg.text else ""
         if replacements and new_text:
             orig_text = new_text
             for old_txt, new_txt_str in replacements.items():
@@ -249,7 +249,7 @@ async def _mj_forward(
                     import os
                     if os.path.exists(fp): os.remove(fp)
                 else:
-                    await client.send_message(chat_id=chat, text=new_text if new_text is not None else (msg.text.html if msg.text else ""), **kw)
+                    await client.send_message(chat_id=chat, text=new_text if new_text is not None else getattr(msg.text, "html", str(msg.text)) if msg.text else "", **kw)
             except Exception as fallback_e:
                 logger.debug(f"[MultiJob _send_one] Fallback failed to {chat}: {fallback_e}")
 
@@ -918,7 +918,7 @@ async def _create_mj_flow(bot, user_id: int):
     if "/cancel" in range_r.text:
         return await bot.send_message(user_id, "<b>Cancelled.</b>")
 
-    start_id = 1
+    start_id = from_thread if from_thread else 1
     end_id   = 0
     rtext    = range_r.text.strip().lower()
     if rtext != "all":
