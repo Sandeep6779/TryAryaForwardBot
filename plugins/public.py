@@ -98,6 +98,38 @@ async def run(bot, message):
             chat_id = fromid.text.strip()
             if chat_id.lstrip('-').isdigit():
                 chat_id = int(chat_id)
+            # ── Optional topic/thread selection ──────────────────────────────
+            topic_btn = ReplyKeyboardMarkup([
+                [KeyboardButton("✅ Yes, has a topic"), KeyboardButton("❌ No topic")]
+            ], resize_keyboard=True, one_time_keyboard=True)
+            topic_q = await bot.ask(
+                message.chat.id,
+                "<b>🗂 Topic / Thread?</b>\n\n"
+                "Is the source a <b>group topic</b>? If yes, I will filter messages from that topic only.\n"
+                "• Send the <b>thread/topic message ID</b> if Yes\n"
+                "• Or click No to forward the whole group",
+                reply_markup=topic_btn
+            )
+            if topic_q.text.startswith('/'):
+                await message.reply(await t(user_id, 'CANCEL'), reply_markup=ReplyKeyboardRemove())
+                return
+
+            from_thread = None
+            if "yes" in topic_q.text.lower() or "topic" in topic_q.text.lower():
+                thread_msg = await bot.ask(
+                    message.chat.id,
+                    "<b>Send the Topic Thread ID</b> (the message ID of the first message in the topic, usually same as topic ID):",
+                    reply_markup=ReplyKeyboardRemove()
+                )
+                if thread_msg.text.startswith('/'):
+                    await message.reply(await t(user_id, 'CANCEL'))
+                    return
+                if thread_msg.text.strip().lstrip('-').isdigit():
+                    from_thread = int(thread_msg.text.strip())
+                else:
+                    await message.reply("Invalid thread ID. Continuing without topic filtering.")
+            # ─────────────────────────────────────────────────────────────────
+
             mode_btn = ReplyKeyboardMarkup([
                 [KeyboardButton("Bᴀᴛᴄʜ"), KeyboardButton("Lɪᴠᴇ")]
             ], resize_keyboard=True, one_time_keyboard=True)
@@ -303,6 +335,5 @@ async def run(bot, message):
     )
     STS(forward_id).store(chat_id, toid, int(skipno.text) if skipno.text.isdigit() else 0,
                           int(last_msg_id), continuous=continuous,
-                          reverse_order=reverse_order, bot_id=selected_bot_id, smart_order=smart_order)
-
-
+                          reverse_order=reverse_order, bot_id=selected_bot_id, smart_order=smart_order,
+                          from_thread=locals().get('from_thread', None))

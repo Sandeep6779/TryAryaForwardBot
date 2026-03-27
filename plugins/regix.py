@@ -238,6 +238,27 @@ async def pub_(bot, message):
                           await asyncio.sleep(sleep)
               sort_buffer.clear()
 
+          # Topic (thread) filter helper — same logic as jobs.py / multijob.py
+          def _msg_in_topic(msg, thread_id: int) -> bool:
+              """Return True if msg belongs to the given topic/thread."""
+              try:
+                  tid = getattr(msg, 'message_thread_id', None)
+                  if tid is None:
+                      tid = getattr(msg, 'reply_to_top_message_id', None)
+                  if tid is not None and int(tid) == thread_id:
+                      return True
+                  if int(msg.id) == thread_id:
+                      return True  # The root message of the topic itself
+              except Exception:
+                  pass
+              return False
+
+          # Inline topic filter value for this job
+          _from_thread = data.get('from_thread', None)
+          if _from_thread:
+              try: _from_thread = int(_from_thread)
+              except: _from_thread = None
+
           async for message in client.iter_messages(
             client,
             chat_id=sts.get('FROM'), 
@@ -254,6 +275,10 @@ async def pub_(bot, message):
                 if pling % 10 == 0:
                     _fwded = int(sts.get('total_files') or 0)
                     asyncio.create_task(channel_progress_update(client, _dest_chat, _fwded, _total_msgs))
+                # Topic (thread) filtering — skip messages not in the requested topic
+                if _from_thread and not _msg_in_topic(message, _from_thread):
+                    sts.add('filtered')
+                    continue
                 # Check message type filtering
                 is_filtered = False
                 _filters = data.get('filters', [])
