@@ -130,12 +130,58 @@ def get_bot_version():
         pass
     return "Unknown"
 
+def _simplify_commit(msg: str) -> str:
+    """Convert a raw git commit message into a simple, user-friendly sentence."""
+    import re as _re
+    # Strip conventional commit prefixes like fix:, feat:, chore:, refactor: etc.
+    msg = _re.sub(r'^(fix|feat|chore|refactor|style|docs|perf|test|build|ci|revert|hotfix|add|update|remove|merge|wip)[:(\[].*?[)\]]?:\s*', '', msg, flags=_re.IGNORECASE).strip()
+    # Common technical patterns → plain words
+    replacements = [
+        (_re.compile(r'\[?[A-Z]+-\d+\]?'), ''),           # Jira ticket refs
+        (_re.compile(r'\battr\b', _re.I), 'attribute'),
+        (_re.compile(r'\bdb\b', _re.I), 'database'),
+        (_re.compile(r'\bsts\b', _re.I), 'status object'),
+        (_re.compile(r'\bregex\b', _re.I), 'pattern matching'),
+        (_re.compile(r'\binit\b', _re.I), 'initialize'),
+        (_re.compile(r'defensive programming', _re.I), 'crash prevention'),
+        (_re.compile(r'\bfwd\b', _re.I), 'forwarding'),
+        (_re.compile(r'\bundle\b', _re.I), 'topic message'),
+        (_re.compile(r'→|->'), 'to'),
+    ]
+    for pattern, replacement in replacements:
+        msg = pattern.sub(replacement, msg)
+    msg = msg.strip(' .-,')
+    if msg and not msg[0].isupper():
+        msg = msg[0].upper() + msg[1:]
+    if msg and not msg.endswith('.'):
+        msg += '.'
+    return msg if len(msg) > 4 else None
+
 def get_whats_new():
     try:
         import subprocess
-        r = subprocess.run(["git", "log", "-15", "--format=• %s"], capture_output=True, text=True)
+        r = subprocess.run(
+            ["git", "log", "-15", "--format=%s|%cs"],
+            capture_output=True, text=True
+        )
         if r.returncode == 0 and r.stdout.strip():
-            return r.stdout.strip()
+            lines = []
+            for entry in r.stdout.strip().splitlines():
+                parts = entry.split('|', 1)
+                raw_msg = parts[0].strip()
+                date_str = parts[1].strip() if len(parts) > 1 else ''
+                # Format date
+                try:
+                    import datetime
+                    dt = datetime.datetime.strptime(date_str, '%Y-%m-%d')
+                    date_label = dt.strftime('%d %b %Y')
+                except Exception:
+                    date_label = date_str
+                simplified = _simplify_commit(raw_msg)
+                if simplified:
+                    lines.append(f"🔸 <b>{date_label}</b> — {simplified}")
+            if lines:
+                return '\n'.join(lines)
     except Exception:
         pass
     return "No recent updates found."

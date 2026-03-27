@@ -115,7 +115,143 @@ def _tm(s):
 
 def _emoji(st):
     return {"downloading":"⬇️","merging":"🔀","uploading":"⬆️","done":"✅",
-            "error":"⚠️","stopped":"🔴","paused":"⏸","queued":"⏳"}.get(st, "❓")
+            "error":"⚠️","stopped":"🔴","paused":"⏸","queued":"⏳","scanning":"🔍"}.get(st, "❓")
+
+IST_OFFSET = datetime.timezone(datetime.timedelta(hours=5, minutes=30))
+
+def _ist_now() -> datetime.datetime:
+    """Return current time in IST (UTC+5:30)."""
+    return datetime.datetime.now(IST_OFFSET)
+
+def _ist_str(fmt='%d %b %Y %I:%M:%S %p IST') -> str:
+    return _ist_now().strftime(fmt)
+
+def _build_info_text(job: dict, now_ts: float | None = None) -> str:
+    """Build the premium info panel text for a merge job."""
+    if now_ts is None:
+        now_ts = time.time()
+
+    mtype = job.get("merge_type", "audio")
+    icon  = "🎵" if mtype == "audio" else "🎬"
+    status = job.get("status", "stopped")
+    name  = job.get("name", job.get("output_name", job.get("job_id", "")[-6:]))
+    created_ts = job.get("created_at", 0)
+    created_str = datetime.datetime.fromtimestamp(created_ts, tz=IST_OFFSET).strftime('%d %b %H:%M IST') if created_ts else "?"
+
+    total_files = max(job.get("end_id", 1) - job.get("start_id", 0), 1)
+    dl_done     = job.get("downloaded", 0)
+    fsz         = job.get("file_size", 0)
+
+    # ── Phase durations (persisted in DB) ─────────────────────────────────
+    dl_time  = job.get("dl_time",  0) or 0
+    mg_time  = job.get("merge_time", 0) or 0
+    up_time  = job.get("up_time",  0) or 0
+    yt_time  = job.get("yt_time",  0) or 0
+    total_time_done = job.get("total_time", 0) or 0
+
+    # ── Live elapsed for active phase ──────────────────────────────────────
+    ph_start = job.get("phase_start_ts", 0) or 0
+    if status in ("downloading", "merging", "uploading", "yt_uploading") and ph_start:
+        live_elapsed = now_ts - ph_start
+    else:
+        live_elapsed = 0
+
+    # ── ETAs from DB ───────────────────────────────────────────────────────
+    dl_eta  = job.get("dl_eta",  0) or 0
+    mg_eta  = job.get("mg_eta",  0) or 0
+    up_eta  = job.get("up_eta",  0) or 0
+    yt_eta  = job.get("yt_eta",  0) or 0
+
+    # ── Overall percentage ─────────────────────────────────────────────────
+    # Weight phases: DL=40%, Merge=20%, TG Upload=25%, YT Upload=15%
+    has_yt = bool(job.get("upload_to_yt"))
+    if status == "done":
+        pct = 100
+    elif status in ("stopped", "error"):
+        pct = 0
+    else:
+        dl_pct  = min(100, int(dl_done / max(total_files, 1) * 100))
+        # Weights
+        w_dl   = 40
+        w_mg   = 20
+        w_up   = 30 if not has_yt else 25
+        w_yt   = 15 if has_yt else 0
+
+        if status == "downloading":
+            pct = int(dl_pct * w_dl / 100)
+        elif status in ("merging", "scanning"):
+            pct = w_dl
+        elif status == "uploading":
+            el = live_elapsed
+            eta_total = up_eta + el if up_eta else el
+            up_frac = min(1.0, el / max(eta_total, 1))
+            pct = w_dl + w_mg + int(up_frac * w_up)
+        elif status == "yt_uploading":
+            el = live_elapsed
+            eta_total = yt_eta + el if yt_eta else el
+            yt_frac = min(1.0, el / max(eta_total, 1))
+            pct = w_dl + w_mg + w_up + int(yt_frac * w_yt)
+        else:
+            pct = 0
+
+    bar_w = 18
+    filled = int(bar_w * pct / 100)
+    prog_bar = f"[{'█' * filled}{'░' * (bar_w - filled)}] {pct}%"
+
+    # ── Phase status rows ──────────────────────────────────────────────────
+    def _phase_row(label, phase_status, done_time, live_eta, is_active):
+        if phase_status == "done":
+            return f"  ✅ {label}: Done ({_tm(done_time)})"
+        elif is_active:
+            eta_str = f"~{_tm(live_eta)}" if live_eta else "calculating…"
+            return f"  ⏳ {label}: In progress — ETA {eta_str}"
+        else:
+            return f"  ⬜ {label}: Pending"
+
+    dl_done_flag  = status not in ("downloading", "scanning", "queued", "stopped", "error")
+    mg_done_flag  = status in ("uploading", "yt_uploading", "done")
+    up_done_flag  = status in ("yt_uploading", "done")
+    yt_done_flag  = status == "done" and has_yt
+
+    dl_row  = _phase_row("📥 Download",        "done" if dl_done_flag else "todo", dl_time,  dl_eta,  status == "downloading")
+    mg_row  = _phase_row("🔀 Merge",           "done" if mg_done_flag else "todo", mg_time,  mg_eta,  status == "merging")
+    up_row  = _phase_row("📤 Telegram Upload", "done" if up_done_flag else "todo", up_time,  up_eta,  status == "uploading")
+    yt_row  = _phase_row("🎥 YouTube Upload",  "done" if yt_done_flag else "todo", yt_time,  yt_eta,  status == "yt_uploading") if has_yt else None
+
+    # ── Total ETA ──────────────────────────────────────────────────────────
+    if status == "done":
+        total_eta_str = f"✅ Completed in {_tm(total_time_done or (dl_time + mg_time + up_time + yt_time))}"
+    else:
+        remaining = 0
+        if not dl_done_flag:  remaining += max(dl_eta - live_elapsed if status == "downloading" else dl_eta, 0)
+        if not mg_done_flag:  remaining += mg_eta
+        if not up_done_flag:  remaining += up_eta
+        if has_yt and not yt_done_flag: remaining += yt_eta
+        total_eta_str = f"~{_tm(remaining)}" if remaining else "Calculating…"
+
+    # ── Assemble ───────────────────────────────────────────────────────────
+    header = f"{_emoji(status)} <b>{icon} {name}</b>  [{job.get('job_id','')[-6:]}]"
+    lines = [
+        header,
+        f"  Status: <b>{status.title()}</b>  •  Range: {job.get('start_id')}→{job.get('end_id')}",
+        f"  <code>{prog_bar}</code>",
+        "",
+        "<b>Phase Progress:</b>",
+        dl_row, mg_row, up_row,
+    ]
+    if yt_row: lines.append(yt_row)
+    lines += [
+        "",
+        f"  ⏱ <b>Total ETA:</b> {total_eta_str}",
+        f"  📁 Files: {dl_done}/{total_files}" + (f"   💾 {_sz(fsz)}" if fsz else ""),
+        f"  🗓 Created: {created_str}",
+    ]
+    if job.get("error"):
+        lines.append(f"\n  ⚠️ Error: <code>{job['error'][:180]}</code>")
+
+    now_ist_str = _ist_now().strftime('%I:%M %p IST')
+    lines.append(f"\n  <i>Last refreshed: {now_ist_str}</i>")
+    return "\n".join(lines)
 
 def _check_ffmpeg():
     return shutil.which("ffmpeg") is not None
@@ -363,7 +499,7 @@ async def _run_job(jid, uid, bot):
         make_video = bool(job.get("make_video", False))
         upload_to_yt = bool(job.get("upload_to_yt", False))
 
-        await _db_up(jid, status="queued", error="")
+        await _db_up(jid, status="queued", error="", created_at=time.time())
 
         # ── Global queue: only 1 merge running at a time ──
         async with _mg_global_lock:
@@ -440,7 +576,7 @@ async def _run_job(jid, uid, bot):
         # ══════════════════════════════════════════════════════════════════
         # PHASE 1 — Collect all media message IDs in strict order
         # ══════════════════════════════════════════════════════════════════
-        await _db_up(jid, status="downloading", error="")
+        await _db_up(jid, status="downloading", error="", phase_start_ts=time.time())
         all_msgs_ordered = []   # list of (msg_id, msg) in channel order
         current = start_id
         while current <= end_id:
@@ -583,8 +719,12 @@ async def _run_job(jid, uid, bot):
                 logger.warning(f"[MG {jid}] Chunk {chunk_num} had no downloadable files, skipping.")
                 continue
 
+            # End download phase — record dl_time
+            _dl_end = time.time()
+            _dl_time = _dl_end - (job.get("phase_start_ts") or _dl_end)
+
             # Partial merge of this chunk
-            await _db_up(jid, status="merging")
+            await _db_up(jid, status="merging", dl_time=_dl_time, phase_start_ts=time.time())
             part_ext  = ".mp4" if mtype == "video" else ".mp3"
             part_path = os.path.join(wdir, f"part_{chunk_num:04d}{part_ext}")
 
@@ -666,7 +806,7 @@ async def _run_job(jid, uid, bot):
         try:
             with open(log_path, "w", encoding="utf-8") as lf:
                 lf.write(f"Processing Log — {out_name}\n")
-                lf.write(f"Generated: {datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n")
+                lf.write(f"Generated: {_ist_str()} \n")
                 lf.write(f"Files: {total_files} | Speed: {speed}x | Type: {mtype}\n")
                 lf.write("=" * 60 + "\n\n")
                 lf.write("TIMECODES (YouTube Chapter Format)\n")
@@ -691,7 +831,9 @@ async def _run_job(jid, uid, bot):
 
         # ── Phase 3: Upload ───────────────────────────────────────────────
         up_start = time.time()
-        await _db_up(jid, status="uploading")
+        # Calculate merge_time from final combine start to now
+        _merge_time = up_start - (job.get("phase_start_ts") or up_start)
+        await _db_up(jid, status="uploading", merge_time=_merge_time, phase_start_ts=up_start)
 
         caption = f"<b>🔀 {out_name}{out_ext}</b>\n📁 {global_seq} files • {_sz(fsize)}"
         if metadata.get("title"): caption += f"\n🎵 {metadata['title']}"
@@ -733,6 +875,7 @@ async def _run_job(jid, uid, bot):
                     logger.warning(f"[MG {jid}] upload {dest}: {e}"); break
 
         up_time = time.time() - up_start
+        await _db_up(jid, up_time=up_time)
 
         # Upload log file if generated
         if log_path and os.path.exists(log_path):
@@ -743,7 +886,9 @@ async def _run_job(jid, uid, bot):
 
         # ── Phase 4: YouTube Upload ───────────────────────────────────────
         yt_msg = ""
+        _yt_start = time.time()
         if upload_to_yt:
+            await _db_up(jid, status="yt_uploading", phase_start_ts=_yt_start)
             try:
                 from plugins.youtube import upload_video_to_youtube
                 yt_status = await bot.send_message(uid, f"<b>⬆️ Uploading to YouTube...</b>\n<i>Please wait, large files take time.</i>")
@@ -811,8 +956,10 @@ async def _run_job(jid, uid, bot):
                 logger.error(f"YouTube exception: {e}")
                 yt_msg = f"┃ 🟥 YouTube: Error\n"
 
-        total_time = up_time
-        await _db_up(jid, status="done", total_time=total_time, file_size=fsize)
+        _yt_time = time.time() - _yt_start if upload_to_yt else 0
+        total_time = dl_total_bytes and (up_time + _yt_time)  # compat field
+        _total = (job.get("dl_time") or 0) + (job.get("merge_time") or 0) + up_time + _yt_time
+        await _db_up(jid, status="done", total_time=_total, yt_time=_yt_time, file_size=fsize)
 
         try:
             await bot.send_message(uid,
@@ -899,7 +1046,7 @@ async def _render_list(bot, uid, msg_or_q, mtype):
                 f"  └ <code>[{j['job_id'][-6:]}]</code>  ⬇️{dl}  📍{j.get('current_id','?')}/{eid}{err}\n"
             )
 
-        now_str = datetime.datetime.now().strftime("%I:%M:%S %p")
+        now_str = _ist_str('%I:%M:%S %p IST')
         text = "\n".join(lines) + f"\n\n<i>Last refreshed: {now_str}</i>"
 
         btns_list = []
@@ -971,54 +1118,7 @@ async def mg_cb(bot, query):
         job = await _db_get(param)
         if not job: return await query.answer("Not found!", show_alert=True)
         mtype = job.get("merge_type", "audio")
-        created = datetime.datetime.fromtimestamp(job.get("created_at",0)).strftime("%d %b %H:%M")
-
-        meta = job.get("metadata", {})
-        meta_txt = "\n".join(f"  {k}: {v}" for k,v in list(meta.items())[:8] if v) if meta else ""
-
-        text = (
-            f"<b>{_emoji(job['status'])} Merge Info</b>\n\n"
-            f"<b>Name:</b> {job.get('name', job.get('output_name','?'))}\n"
-            f"<b>Type:</b> {'🎵 Audio' if mtype=='audio' else '🎬 Video'}\n"
-            f"<b>Range:</b> {job.get('start_id')} → {job.get('end_id')}\n"
-            f"<b>Downloaded:</b> {job.get('downloaded',0)} files\n"
-            f"<b>Cover:</b> {'✅' if job.get('has_cover') else '❌'}\n"
-            f"<b>Status:</b> {job['status']}\n"
-            f"<b>Created:</b> {created}\n"
-        )
-
-        dl_t = job.get("dl_time",0); mg_t = job.get("merge_time",0)
-        up_t = job.get("up_time",0); tot = job.get("total_time",0)
-        status = job['status']
-
-        if status in ("downloading", "merging", "uploading"):
-            dl_str = f"{_tm(job.get('dl_eta',0))}" if status == "downloading" else "Done ✅"
-            mg_str = "Done ✅" if status == "uploading" else f"~{_tm(job.get('mg_eta',0))}"
-            up_str = f"~{_tm(job.get('up_eta',0))}"
-            tot_str = f"~{_tm(job.get('total_eta',0))}"
-            
-            text += (
-                f"\n╭──── ⏳ Live ETA ────╮\n"
-                f"┃ ⬇️ Download: {dl_str}\n"
-                f"┃ 🔀 Merge: {mg_str}\n"
-                f"┃ ⬆️ Upload: {up_str}\n"
-                f"┃ 📊 Total ETA: {tot_str}\n"
-                f"╰────────────────────╯\n"
-            )
-        elif dl_t or mg_t or up_t:
-            text += (
-                f"\n╭──── ⏱ Timings ────╮\n"
-                f"┃ ⬇️ Download: {_tm(dl_t)}\n"
-                f"┃ 🔀 Merge: {_tm(mg_t)}\n"
-                f"┃ ⬆️ Upload: {_tm(up_t)}\n"
-                f"┃ 📊 Total: {_tm(tot)}\n"
-                f"╰────────────────────╯\n"
-            )
-
-        fsz = job.get("file_size",0)
-        if fsz: text += f"\n<b>Size:</b> {_sz(fsz)}\n"
-        if meta_txt: text += f"\n<b>Metadata:</b>\n{meta_txt}\n"
-        if job.get("error"): text += f"\n<b>⚠️ Error:</b> <code>{job['error'][:200]}</code>"
+        text = _build_info_text(job)
 
         info_btns = [
             [InlineKeyboardButton("🔄 Refresh", callback_data=f"mg#info#{param}")],
