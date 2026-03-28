@@ -26,6 +26,7 @@ class Database:
         self.chl = self.db.channels
         self.stats = self.db.global_stats
         self.share_links = self.db.share_links
+        self.share_config = self.db.share_config  # global share bot settings
         
     async def set_share_bot_token(self, token: str):
         await self.stats.update_one({'_id': 'share_bot'}, {'$set': {'token': token}}, upsert=True)
@@ -48,16 +49,47 @@ class Database:
         doc = await self.col.find_one({'_id': user_id})
         return doc.get('share_autodelete', 0) if doc else 0
 
-    async def save_share_link(self, uuid_str: str, message_ids: list, source_chat, protect: bool = True, auto_delete: int = 0, access_hash: int = 0):
+    # ── Global Share Config ──────────────────────────────────────
+    async def _share_cfg(self) -> dict:
+        doc = await self.share_config.find_one({'_id': 'global'})
+        return doc or {}
+
+    async def _set_share_cfg(self, **kwargs):
+        await self.share_config.update_one({'_id': 'global'}, {'$set': kwargs}, upsert=True)
+
+    # Auto-delete (global, minutes)
+    async def get_share_autodelete_global(self) -> int:
+        return (await self._share_cfg()).get('auto_delete', 0)
+
+    async def set_share_autodelete_global(self, minutes: int):
+        await self._set_share_cfg(auto_delete=minutes)
+
+    # Buttons per post (global)
+    async def get_share_buttons_per_post(self) -> int:
+        return (await self._share_cfg()).get('buttons_per_post', 10)
+
+    async def set_share_buttons_per_post(self, n: int):
+        await self._set_share_cfg(buttons_per_post=n)
+
+    # Force-subscribe channels list [{chat_id, title, invite_link, join_request}]
+    async def get_share_fsub_channels(self) -> list:
+        return (await self._share_cfg()).get('fsub_channels', [])
+
+    async def set_share_fsub_channels(self, channels: list):
+        await self._set_share_cfg(fsub_channels=channels)
+
+    # save_share_link — access_hash allows Share Bot to rebuild peer cache at delivery time
+    async def save_share_link(self, uuid_str: str, message_ids: list, source_chat,
+                              protect: bool = True, access_hash: int = 0):
         doc = {
             '_id': uuid_str,
             'message_ids': message_ids,
             'source_chat': source_chat,
             'protect': protect,
-            'auto_delete': auto_delete,
             'access_hash': access_hash,
         }
         await self.share_links.update_one({'_id': uuid_str}, {'$set': doc}, upsert=True)
+
 
     async def get_share_link(self, uuid_str: str):
         return await self.share_links.find_one({'_id': uuid_str})

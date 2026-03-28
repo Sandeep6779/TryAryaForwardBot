@@ -262,26 +262,36 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             pass  # non-fatal
 
         # Save db channel access_hash for delivery-time peer injection in the Share Bot
-        db_access_hash = db_peer.access_hash if hasattr(db_peer, 'access_hash') else 0
+        db_access_hash   = db_peer.access_hash if hasattr(db_peer, 'access_hash') else 0
+        protect          = await db.get_share_protect(user_id)
+        buttons_per_post = await db.get_share_buttons_per_post()
 
-        protect  = await db.get_share_protect(user_id)
-        auto_del = await db.get_share_autodelete(user_id)
 
-        current_id = sj['start_id']
-        end_ep     = sj['end_id']
-        chunk_size = sj['batch_size']
-        story      = sj['story']
+        source_chat_id = sj['source']
+        current_id     = sj['start_id']
+        end_ep         = sj['end_id']
+        batch_size     = sj['batch_size']
+        story          = sj['story']
+        SCAN_CHUNK     = 100  # Telegram allows up to 100 IDs per GetMessages call
 
-        raw_buttons = []
-        ep_counter  = 1  # Episode number (1-based, tracks across all batches)
+        # ── PHASE 1: Scan entire range, collect ALL valid message IDs ──────────
+        # We scan in chunks of 100 IDs regardless of batch_size.
+        # This decouples the API call size from the button grouping size,
+        # so episodes are never mis-numbered due to partial chunks.
+        import re as _re
+        all_valid_ids = []
+        total_scanned = 0
+
+        await safe_edit(
+            f"<i>⏳ Scanning database channel "
+            f"(IDs {current_id}–{end_ep}, {end_ep - current_id + 1} slots)...</i>"
+        )
 
         while current_id <= end_ep:
-            chunk_end = min(current_id + chunk_size - 1, end_ep)
+            chunk_end = min(current_id + SCAN_CHUNK - 1, end_ep)
             msg_ids   = list(range(current_id, chunk_end + 1))
 
-            # Step 2: Fetch messages via raw API on the MAIN BOT with the resolved peer
-            # This completely bypasses Pyrogram's peer resolution on the worker side
-            for attempt in range(5):
+            for attempt in range(6):
                 try:
                     raw_result = await bot.invoke(
                         ChannelGetMessages(
@@ -289,75 +299,72 @@ async def _build_share_links(bot, user_id, sj, info_msg):
                             id=[InputMessageID(id=mid) for mid in msg_ids]
                         )
                     )
-                    messages = raw_result.messages
-                    break  # success
+                    for m in raw_result.messages:
+                        if type(m).__name__ not in ('MessageEmpty', 'MessageService'):
+                            all_valid_ids.append(m.id)
+                    break
                 except Exception as e:
                     err_str = str(e)
-                    # FloodWait: extract seconds and sleep automatically
                     if "FLOOD_WAIT" in err_str or "420" in err_str:
-                        import re
-                        wait_secs = 15  # safe default
-                        m_wait = re.search(r'wait of (\d+)', err_str)
-                        if m_wait:
-                            wait_secs = int(m_wait.group(1)) + 2
+                        mw = _re.search(r'wait of (\d+)', err_str)
+                        wait_secs = (int(mw.group(1)) + 2) if mw else 15
                         await safe_edit(
-                            f"<i>⏳ Telegram rate limit hit — waiting {wait_secs}s before continuing "
-                            f"(processed up to ID {current_id})...</i>"
+                            f"<i>⏳ Rate limit — waiting {wait_secs}s "
+                            f"(scanned {current_id - sj['start_id']} / "
+                            f"{end_ep - sj['start_id'] + 1} slots)...</i>"
                         )
                         await asyncio.sleep(wait_secs)
-                        continue  # retry
-                    # Other errors: abort
+                        continue
                     return await safe_edit(
                         f"<b>❌ Scan Error:</b> <code>{e}</code>\n\n"
                         f"<i>Make sure the Main Bot is an admin in the database channel.</i>"
                     )
             else:
-                return await safe_edit("❌ Scan failed after 5 retries due to repeated FloodWait. Try again in a few minutes.")
+                return await safe_edit("❌ Scan aborted after 6 retries due to FloodWait.")
 
-
-            # Keep only real messages (skip MessageEmpty, MessageService)
-
-            valid_ids = []
-            for m in messages:
-                # Raw Pyrogram message types: Message (has content), MessageEmpty, MessageService
-                cls = type(m).__name__
-                if cls in ('MessageEmpty', 'MessageService'):
-                    continue
-                valid_ids.append(m.id)
-
-            if valid_ids:
-                ep_start = ep_counter
-                ep_end   = ep_counter + len(valid_ids) - 1
-
-                uuid_str = str(uuid.uuid4()).replace('-', '')[:16]
-                await db.save_share_link(uuid_str, valid_ids, source_chat_id, protect, auto_del, access_hash=db_access_hash)
-
-                url = f"https://t.me/{bot_usr}?start={uuid_str}"
-
-                # Episode-named button label
-                if len(valid_ids) == 1:
-                    btn_text = f"{story} Ep. {ep_start}"
-                else:
-                    btn_text = f"{story} Ep. {ep_start}–{ep_end}"
-
-                raw_buttons.append({
-                    "btn": InlineKeyboardButton(btn_text, url=url),
-                    "ep_start": ep_start,
-                    "ep_end":   ep_end,
-                })
-
-                ep_counter = ep_end + 1
-
+            total_scanned += len(msg_ids)
             current_id = chunk_end + 1
-            await asyncio.sleep(0.5)  # Flood-wait safety
+            await asyncio.sleep(0.3)   # gentle pacing
 
-        if not raw_buttons:
-            return await safe_edit("❌ No valid messages found in the given range. Check Start/End IDs.")
+        if not all_valid_ids:
+            return await safe_edit("❌ No valid messages found in the given ID range. Check Start/End IDs.")
 
-        # Phase 2: Group into posts of 10 buttons (2 per row) and send to target channel
+        # Sort to guarantee ascending order (Telegram may return out-of-order)
+        all_valid_ids.sort()
+
+        # ── PHASE 2: Group valid IDs into batches of exactly batch_size episodes ──
+        # ep_counter tracks the SEQUENTIAL episode label (1, 2, 3...) regardless of
+        # gaps in message IDs or deleted messages — so button "21–40" always has ≤20 files.
+        raw_buttons = []
+        ep_counter  = 1
+
+        for i in range(0, len(all_valid_ids), batch_size):
+            batch    = all_valid_ids[i : i + batch_size]
+            ep_start = ep_counter
+            ep_end   = ep_counter + len(batch) - 1
+
+            uuid_str = str(uuid.uuid4()).replace('-', '')[:16]
+            await db.save_share_link(
+                uuid_str, batch, source_chat_id,
+                protect=protect, access_hash=db_access_hash
+            )
+
+            url = f"https://t.me/{bot_usr}?start={uuid_str}"
+
+            # Pure number labels — no story name, no "Ep." inside buttons
+            btn_text = str(ep_start) if len(batch) == 1 else f"{ep_start}–{ep_end}"
+
+            raw_buttons.append({
+                "btn":      InlineKeyboardButton(btn_text, url=url),
+                "ep_start": ep_start,
+                "ep_end":   ep_end,
+            })
+            ep_counter = ep_end + 1
+
+        # ── PHASE 3: Group buttons into posts and send to target channel ──────
         post_count = 0
-        for i in range(0, len(raw_buttons), 10):
-            chunk = raw_buttons[i:i + 10]
+        for i in range(0, len(raw_buttons), buttons_per_post):
+            chunk = raw_buttons[i : i + buttons_per_post]
 
             first_ep = chunk[0]["ep_start"]
             last_ep  = chunk[-1]["ep_end"]
@@ -392,10 +399,11 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         total_ep = ep_counter - 1
         await safe_edit(
             f"<b>✅ Share Links Generated!</b>\n\n"
-            f"📊 <b>Episodes covered:</b> {total_ep}\n"
-            f"🔗 <b>Links created:</b> {len(raw_buttons)}\n"
+            f"📊 <b>Valid files found:</b> {len(all_valid_ids)}\n"
+            f"🎯 <b>Episodes labelled:</b> 1–{total_ep}\n"
+            f"🔗 <b>Link buttons created:</b> {len(raw_buttons)}\n"
             f"📝 <b>Posts sent to channel:</b> {post_count}\n\n"
-            f"<i>Users can now click any button to receive their episodes from @{bot_usr}.</i>"
+            f"<i>Users click any button to receive their episodes from @{bot_usr}.</i>"
         )
 
     except Exception as e:
@@ -409,6 +417,3 @@ async def _build_share_links(bot, user_id, sj, info_msg):
     finally:
         if user_id in new_share_job:
             del new_share_job[user_id]
-
-
-

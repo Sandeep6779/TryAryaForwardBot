@@ -147,28 +147,33 @@ async def settings_query(bot, query):
      await query.message.edit_text("<b>Successfully changed active account.</b>", reply_markup=InlineKeyboardMarkup(buttons))
 
   elif type == "sharebot":
-     token = await db.get_share_bot_token()
-     protect = await db.get_share_protect(user_id)
-     auto_delete = await db.get_share_autodelete(user_id)
-     
-     ptxt = "✅ ON" if protect else "❌ OFF"
+     token       = await db.get_share_bot_token()
+     protect     = await db.get_share_protect(user_id)
+     auto_delete = await db.get_share_autodelete_global()
+     bpp         = await db.get_share_buttons_per_post()
+     fsub_chs    = await db.get_share_fsub_channels()
 
-     if auto_delete == 0:
-         adtxt = "❌ OFF"
-     elif auto_delete < 60:
-         adtxt = f"⏱ {auto_delete}m"
-     elif auto_delete < 1440:
-         adtxt = f"⏱ {auto_delete // 60}h"
-     else:
-         adtxt = f"⏱ {auto_delete // 60}h"
+     ptxt = "✅ ON" if protect else "❌ OFF"
+     if auto_delete == 0:    adtxt = "❌ OFF"
+     elif auto_delete < 60:  adtxt = f"⏱ {auto_delete}m"
+     else:                   adtxt = f"⏱ {auto_delete // 60}h"
 
      buttons = [
          [InlineKeyboardButton(f'🛡 Protection: {ptxt}', callback_data='settings#sharebotprotect')],
          [InlineKeyboardButton(f'⏱ Auto-Delete: {adtxt}', callback_data='settings#sharebotautodel')],
+         [InlineKeyboardButton(f'🗂 Buttons/Post: {bpp}', callback_data='settings#sharebot_bpp')],
+         [InlineKeyboardButton(f'📢 Force-Subscribe ({len(fsub_chs)}/6)', callback_data='settings#sharefsub')],
          [InlineKeyboardButton('✏️ Set / Update Token', callback_data='settings#editsharebot')],
          [InlineKeyboardButton('↩ Back', callback_data='settings#main')]
      ]
-     txt = f"<b>🔗 File-Sharing Bots Setup</b>\n\n<b>Current Token:</b>\n<code>{token or '❌ Not Set'}</code>\n\nConfigure your delivery agent below. This bot securely delivers your hidden Database files to users in DM.\n\n<b>Protection:</b> Restricts saving & forwarding.\n<b>Auto-Delete:</b> Deletes delivered files after time completes."
+     txt = (
+         f"<b>🔗 File-Sharing Bot Setup</b>\n\n"
+         f"<b>Token:</b> <code>{token or '❌ Not Set'}</code>\n\n"
+         f"<b>Protection</b> — restricts saving & forwarding delivered files.\n"
+         f"<b>Auto-Delete</b> — globally deletes files after the timer (applies to all links).\n"
+         f"<b>Buttons/Post</b> — how many episode buttons appear per channel post.\n"
+         f"<b>Force-Subscribe</b> — users must join specified channels before receiving files."
+     )
      await query.message.edit_text(txt, reply_markup=InlineKeyboardMarkup(buttons))
 
   elif type == "sharebotprotect":
@@ -178,9 +183,9 @@ async def settings_query(bot, query):
      return await edit_settings(client, query, "sharebot")
 
   elif type == "sharebotautodel":
-     # Cycle autodelete: 0 (Off) -> 5 mins -> 30 mins -> 60 mins -> 1440 mins (24h) -> 0
-     current = await db.get_share_autodelete(user_id)
-     if current == 0:       nxt = 5
+     # Global cycle: Off → 5m → 15m → 3h → 6h → 12h → 24h → 48h → Off
+     current = await db.get_share_autodelete_global()
+     if current == 0:      nxt = 5
      elif current == 5:    nxt = 15
      elif current == 15:   nxt = 180
      elif current == 180:  nxt = 360
@@ -188,9 +193,111 @@ async def settings_query(bot, query):
      elif current == 720:  nxt = 1440
      elif current == 1440: nxt = 2880
      else:                 nxt = 0
-
-     await db.set_share_autodelete(user_id, nxt)
+     await db.set_share_autodelete_global(nxt)
      await query.answer("Auto-Delete Timer Updated!")
+     return await edit_settings(client, query, "sharebot")
+
+  elif type == "sharebot_bpp":
+     # Cycle buttons-per-post: 4 → 6 → 8 → 10 → 12 → 16 → 20 → 4
+     current = await db.get_share_buttons_per_post()
+     cycle   = [4, 6, 8, 10, 12, 16, 20]
+     try:
+         idx = cycle.index(current)
+         nxt = cycle[(idx + 1) % len(cycle)]
+     except ValueError:
+         nxt = 10
+     await db.set_share_buttons_per_post(nxt)
+     await query.answer(f"Buttons per post set to {nxt}")
+     return await edit_settings(client, query, "sharebot")
+
+  elif type == "sharefsub":
+     fsub_chs = await db.get_share_fsub_channels()
+     lines = []
+     btns  = []
+     for i, ch in enumerate(fsub_chs):
+         jr_lbl = " [JR]" if ch.get('join_request') else ""
+         lines.append(f"{i+1}. {ch.get('title','?')}{jr_lbl}")
+         btns.append([
+             InlineKeyboardButton(f"🔄 Toggle JR #{i+1}",  callback_data=f"settings#sharefsub_jr_{i}"),
+             InlineKeyboardButton(f"❌ Remove #{i+1}", callback_data=f"settings#sharefsub_del_{i}")
+         ])
+     ch_list = "\n".join(lines) if lines else "None configured."
+     if len(fsub_chs) < 6:
+         btns.append([InlineKeyboardButton("➕ Add Channel/Group", callback_data="settings#sharefsub_add")])
+     btns.append([InlineKeyboardButton("↩ Back", callback_data="settings#sharebot")])
+     await query.message.edit_text(
+         f"<b>📢 Force-Subscribe Channels</b>\n\n"
+         f"Users must join ALL listed channels to receive files.\n"
+         f"[JR] = join-request mode (user sends request; admin approves).\n\n"
+         f"{ch_list}",
+         reply_markup=InlineKeyboardMarkup(btns)
+     )
+
+  elif type == "sharefsub_add":
+     fsub_chs = await db.get_share_fsub_channels()
+     if len(fsub_chs) >= 6:
+         return await query.answer("Maximum 6 channels supported.", show_alert=True)
+     await query.message.delete()
+     try:
+         ask = await bot.send_message(
+             user_id,
+             "<b>Send the Channel/Group ID or @username</b>\n"
+             "Example: <code>-1001234567890</code> or <code>@mychannel</code>\n\n"
+             "/cancel to abort"
+         )
+         resp = await bot.listen(chat_id=user_id, timeout=120)
+         if resp.text.strip() == "/cancel":
+             await resp.delete()
+             return await ask.edit_text("Cancelled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩ Back", callback_data="settings#sharefsub")]]))
+         raw_id = resp.text.strip()
+         await resp.delete()
+         try:
+             ch_obj = await bot.get_chat(raw_id)
+             try:
+                 invite = await bot.export_chat_invite_link(ch_obj.id)
+             except Exception:
+                 invite = getattr(ch_obj, 'invite_link', '') or ''
+             fsub_chs.append({
+                 'chat_id':     str(ch_obj.id),
+                 'title':       ch_obj.title or ch_obj.username or str(ch_obj.id),
+                 'invite_link': invite,
+                 'join_request': False,
+             })
+             await db.set_share_fsub_channels(fsub_chs)
+             await ask.edit_text(
+                 f"✅ Added: <b>{ch_obj.title}</b>",
+                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩ Back", callback_data="settings#sharefsub")]])
+             )
+         except Exception as e:
+             await ask.edit_text(
+                 f"❌ Failed to add channel: <code>{e}</code>\n"
+                 "Make sure the Main Bot is an admin in that channel.",
+                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩ Back", callback_data="settings#sharefsub")]])
+             )
+     except asyncio.exceptions.TimeoutError:
+         try: await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩ Back", callback_data="settings#sharefsub")]]))
+         except Exception: pass
+
+  elif type.startswith("sharefsub_jr_"):
+     idx      = int(type.split("_")[-1])
+     fsub_chs = await db.get_share_fsub_channels()
+     if 0 <= idx < len(fsub_chs):
+         fsub_chs[idx]['join_request'] = not fsub_chs[idx].get('join_request', False)
+         await db.set_share_fsub_channels(fsub_chs)
+         status = "ON" if fsub_chs[idx]['join_request'] else "OFF"
+         await query.answer(f"Join-Request mode: {status}")
+     return await edit_settings(client, query, "sharefsub")
+
+  elif type.startswith("sharefsub_del_"):
+     idx      = int(type.split("_")[-1])
+     fsub_chs = await db.get_share_fsub_channels()
+     if 0 <= idx < len(fsub_chs):
+         removed = fsub_chs.pop(idx)
+         await db.set_share_fsub_channels(fsub_chs)
+         await query.answer(f"Removed: {removed.get('title','?')}")
+     return await edit_settings(client, query, "sharefsub")
+
+wait query.answer("Auto-Delete Timer Updated!")
      return await edit_settings(client, query, "sharebot")
 
   elif type == "editsharebot":
