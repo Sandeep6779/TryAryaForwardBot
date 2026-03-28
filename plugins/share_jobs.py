@@ -191,7 +191,10 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             worker = share_mod.share_client
         else:
             from plugins.test import start_clone_bot
-            worker = await start_clone_bot(_CLIENT, sj['bot_id'])
+            bot_info = await db.get_bot(sj['bot_id'])
+            if not bot_info:
+                return await bot.send_message(user_id, "❌ Worker account not found in DB.", reply_markup=ReplyKeyboardRemove())
+            worker = await start_clone_bot(_CLIENT.client(bot_info))
             
         if not worker:
             return await bot.send_message(user_id, "❌ Failed to start worker account.", reply_markup=ReplyKeyboardRemove())
