@@ -49,7 +49,7 @@ async def sl_callback(bot, query):
         new_share_job[user_id]['bot_id'] = bot_id
         
         await query.message.edit_text("<i>Loading channels...</i>")
-        chans = await db.get_channels(user_id)
+        chans = await db.get_user_channels(user_id)
         if not chans:
             return await query.message.edit_text("<b>❌ No channels added in /settings.</b>")
             
@@ -67,7 +67,7 @@ async def sl_callback(bot, query):
         src_id = int(cmd.split('_')[1])
         new_share_job[user_id]['source'] = src_id
         
-        chans = await db.get_channels(user_id)
+        chans = await db.get_user_channels(user_id)
         btns = []
         for c in chans:
             btns.append([InlineKeyboardButton(c['title'], callback_data=f"sl#tgt_{c['id']}")])
