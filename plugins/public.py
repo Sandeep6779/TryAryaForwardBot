@@ -271,6 +271,13 @@ async def run(bot, message):
     filter_str = (', '.join(f'❌{t}' for t in disabled_types) or '✅ All allowed')
     smart_lbl = "🧠 ON" if smart_order else "⚡ OFF (raw)"
 
+    # Calculate if this needs the SLOW MODE warning
+    is_private_source = title == "private" or title == "Saved Messages" or str(title).lstrip('-').isdigit()
+    needs_download = configs.get('download') or (is_private_source and not configs.get('forward_tag'))
+    # Correct the Transfer label if private source auto-enables download
+    if needs_download and not configs.get('download'):
+        dl_mode = "⬇️ Auto Download (private source)"
+
     if acc_is_bot:
         hints = (
             f"<blockquote expandable>"
@@ -286,10 +293,6 @@ async def run(bot, message):
             f"</blockquote>\n"
         )
 
-    # Calculate if this needs the SLOW MODE warning
-    is_private_source = title == "private" or title == "Saved Messages" or str(title).lstrip('-').isdigit()
-    needs_download = configs.get('download') or (is_private_source and not configs.get('forward_tag'))
-    
     warning_box = ""
     if not acc_is_bot or needs_download or reverse_order:
         warning_box = (

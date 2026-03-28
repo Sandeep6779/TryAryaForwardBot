@@ -73,10 +73,13 @@ async def pub_(bot, message):
           pling=0
           await edit(m, 'Progressing', 10, sts)
           print(f"Starting Forwarding Process... From :{sts.get('FROM')} To: {sts.get('TO')} Totel: {sts.get('limit')} stats : {sts.get('skip')})")
-          # Start channel-side progress bar
+          # Start channel-side progress bar (awaits so errors surface before the loop starts)
           _dest_chat = int(sts.get('TO'))
           _total_msgs = int(sts.get('limit')) if sts.get('limit') else 0
-          asyncio.create_task(channel_progress_start(client, _dest_chat, _total_msgs))
+          try:
+              await channel_progress_start(client, _dest_chat, _total_msgs)
+          except Exception as _pg_e:
+              logger.warning(f"[ChannelProgress] Could not start: {_pg_e}")
 
           # Use getattr to safely check for 'continuous' attribute since old STS objects might not have it
           is_continuous = getattr(sts, 'continuous', False)
@@ -266,7 +269,6 @@ async def pub_(bot, message):
               from_chat = user
 
           async for message in client.iter_messages(
-            client,
             chat_id=from_chat, 
             limit=int(sts.get('limit')), 
             offset=int(sts.get('skip')) if sts.get('skip') else 0,
