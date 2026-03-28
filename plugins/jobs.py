@@ -554,10 +554,32 @@ async def _run_job(job_id: str, user_id: int):
         # ── LIVE PHASE ─────────────────────────────────────────────────────
         logger.info(f"[Job {job_id}] Live polling started. last_seen={last_seen}")
 
+        # Send / restore live-phase destination progress message
+        live_prog_id = (await _get_job(job_id)).get("live_prog_msg_id")
+        if not live_prog_id:
+            try:
+                _cur_fwd = (await _get_job(job_id)).get("forwarded", 0)
+                live_sent = await client.send_message(
+                    to_chat,
+                    f"📡 <b>Live Job Active — monitoring for new messages…</b>\n\n"
+                    f"✅ Forwarded so far: <code>{_cur_fwd}</code>\n"
+                    f"🔍 Last updated: <code>{time.strftime('%H:%M:%S')}</code>\n\n"
+                    f"<i>This message updates every 60s. Powered by Arya Forward Bot</i>"
+                )
+                live_prog_id = live_sent.id
+                await _update_job(job_id, live_prog_msg_id=live_prog_id)
+                try: await client.pin_chat_message(to_chat, live_prog_id, disable_notification=True)
+                except Exception: pass
+            except Exception:
+                live_prog_id = None
+
+        live_last_update = 0.0
+
         while True:
             fresh = await _get_job(job_id)
             if not fresh or fresh.get("status") != "running":
                 break
+
 
             disabled_types: list = await db.get_filters(user_id)
             configs        = await db.get_configs(user_id)
@@ -655,6 +677,22 @@ async def _run_job(job_id: str, user_id: int):
 
             if new_msgs:
                 await _update_job(job_id, last_seen_id=last_seen)
+
+            # Update live phase destination progress bar every 60s
+            now_live = time.time()
+            if live_prog_id and (now_live - live_last_update) >= 60:
+                live_last_update = now_live
+                try:
+                    _cur_fwd = (await _get_job(job_id)).get("forwarded", 0)
+                    await client.edit_message_text(
+                        to_chat, live_prog_id,
+                        f"📡 <b>Live Job Active — monitoring for new messages…</b>\n\n"
+                        f"✅ Forwarded so far: <code>{_cur_fwd}</code>\n"
+                        f"🔍 Last updated: <code>{time.strftime('%H:%M:%S')}</code>\n\n"
+                        f"<i>This message updates every 60s. Powered by Arya Forward Bot</i>"
+                    )
+                except Exception:
+                    pass
 
             sleep_secs = configs.get("duration", 5) or 5
             await asyncio.sleep(max(5, sleep_secs))

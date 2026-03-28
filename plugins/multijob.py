@@ -330,6 +330,47 @@ async def _run_multijob(job_id: str, user_id: int, bot=None):
         sleep_secs     = max(1, int(configs.get('duration', 1) or 1))
         replacements   = configs.get('replacements', {})
 
+        # ── Destination progress bar ────────────────────────────────────────
+        def _mj_prog_text(fwd: int, total: int, status: str = "running") -> str:
+            pct = min(int(fwd * 100 / total), 100) if total > 0 else 0
+            bar = "█" * (pct // 5) + "░" * (20 - pct // 5)
+            if status == "done":
+                head = "✅ <b>Multi Job Complete!</b>"
+                body = f"<b>All {fwd} files forwarded successfully.</b>"
+            elif status == "stopped":
+                head = "⏹ <b>Multi Job Stopped</b>"
+                body = f"<b>Stopped at {fwd} / {total if total else '?'} files.</b>"
+            elif status == "error":
+                head = "⚠️ <b>Multi Job Error</b>"
+                body = f"<b>Failed after forwarding {fwd} files.</b>"
+            else:
+                head = "📤 <b>Multi Job Running — please wait…</b>"
+                body = f"<b>Files:</b> <code>{fwd}</code> / <code>{total if total else '?'}</code>"
+            return (
+                f"{head}\n\n"
+                f"<code>[{bar}]</code>  <b>{pct}%</b>\n"
+                f"{body}\n\n"
+                f"<i>Powered by Arya Forward Bot</i>"
+            )
+
+        mj_total = max(0, end_id - int(job.get("start_id") or 1)) if end_id > 0 else 0
+        mj_prog_msg_id = job.get("prog_msg_id", None)
+        if not mj_prog_msg_id:
+            try:
+                sent = await client.send_message(to_chat, _mj_prog_text(0, mj_total), parse_mode="html")
+                mj_prog_msg_id = sent.id
+                await _mj_update(job_id, prog_msg_id=mj_prog_msg_id)
+                try: await client.pin_chat_message(to_chat, mj_prog_msg_id, disable_notification=True)
+                except Exception: pass
+            except Exception:
+                mj_prog_msg_id = None
+
+        mj_last_prog_update = 0.0
+        mj_start_time = time.time()
+        mj_fwd_at_start = int(job.get("forwarded", 0))
+        # ───────────────────────────────────────────────────────────────────
+
+
         while True:
             # Pause check
             await pause_ev.wait()
@@ -337,12 +378,32 @@ async def _run_multijob(job_id: str, user_id: int, bot=None):
             # Stop check
             fresh = await _mj_get(job_id)
             if not fresh or fresh.get("status") in ("stopped", "error"):
+                # Finalize progress bar on external stop
+                if client and mj_prog_msg_id:
+                    try:
+                        fj = await _mj_get(job_id)
+                        _fwd = fj.get("forwarded", 0) if fj else 0
+                        await client.edit_message_text(to_chat, mj_prog_msg_id, _mj_prog_text(_fwd, mj_total, "stopped"), parse_mode="html")
+                    except Exception: pass
                 break
 
             # End check
             if end_id > 0 and current > end_id:
                 await _mj_update(job_id, status="done", current_id=current)
                 logger.info(f"[MultiJob {job_id}] Done — reached end_id {end_id}")
+                # Finalize destination progress bar
+                if client and mj_prog_msg_id:
+                    try:
+                        fj = await _mj_get(job_id)
+                        _fwd = fj.get("forwarded", 0) if fj else 0
+                        await client.edit_message_text(to_chat, mj_prog_msg_id, _mj_prog_text(_fwd, mj_total, "done"), parse_mode="html")
+                        await client.unpin_chat_message(to_chat, mj_prog_msg_id)
+                        async def _del_done_prog():
+                            await asyncio.sleep(300)
+                            try: await client.delete_messages(to_chat, mj_prog_msg_id)
+                            except Exception: pass
+                        asyncio.create_task(_del_done_prog())
+                    except Exception: pass
                 # Send completion report
                 done_job = await _mj_get(job_id)
                 if done_job:
@@ -423,6 +484,19 @@ async def _run_multijob(job_id: str, user_id: int, bot=None):
                 if consecutive_empty >= 200:  # 200 * 200 IDs = 40,000 gaps before giving up
                     await _mj_update(job_id, status="done", current_id=current)
                     logger.info(f"[MultiJob {job_id}] Done — no more messages after {current}")
+                    # Finalize destination progress bar
+                    if client and mj_prog_msg_id:
+                        try:
+                            fj = await _mj_get(job_id)
+                            _fwd = fj.get("forwarded", 0) if fj else 0
+                            await client.edit_message_text(to_chat, mj_prog_msg_id, _mj_prog_text(_fwd, mj_total, "done"), parse_mode="html")
+                            await client.unpin_chat_message(to_chat, mj_prog_msg_id)
+                            async def _del_empty_prog():
+                                await asyncio.sleep(300)
+                                try: await client.delete_messages(to_chat, mj_prog_msg_id)
+                                except Exception: pass
+                            asyncio.create_task(_del_empty_prog())
+                        except Exception: pass
                     # Send completion report
                     done_job2 = await _mj_get(job_id)
                     if done_job2:
@@ -479,12 +553,66 @@ async def _run_multijob(job_id: str, user_id: int, bot=None):
             # Advance cursor
             current = valid[-1].id + 1
             await _mj_update(job_id, current_id=current)
+
+            # ── Update destination progress bar (every 30s) ──────────────
+            now_mj = time.time()
+            if mj_prog_msg_id and (now_mj - mj_last_prog_update) >= 30:
+                mj_last_prog_update = now_mj
+                try:
+                    fresh_j = await _mj_get(job_id)
+                    _fwd = fresh_j.get("forwarded", 0) if fresh_j else 0
+                    # Dynamic ETA
+                    _elapsed = max(1, now_mj - mj_start_time)
+                    _delta   = _fwd - mj_fwd_at_start
+                    _spd     = _delta / _elapsed
+                    if _spd > 0 and end_id > 0:
+                        _rem = max(0, end_id - current)
+                        _eta_s = int(_rem / _spd)
+                        _h, _r = divmod(_eta_s, 3600)
+                        _m2 = _r // 60
+                        _eta_str = f"{_h}h {_m2}m" if _h else f"{_m2}m"
+                    else:
+                        _eta_str = "Calculating..."
+                    _pct = 0
+                    if end_id > 0 and current > int(job.get("start_id") or 1):
+                        _pct = min(99, int((current - int(job.get("start_id") or 1)) / max(1, end_id - int(job.get("start_id") or 1)) * 100))
+                    _filled = _pct // 5
+                    _bar = "█" * _filled + "░" * (20 - _filled)
+                    _prog_txt = (
+                        f"📤 <b>Multi Job Running — please wait…</b>\n\n"
+                        f"<code>[{_bar}]</code>  <b>{_pct}%</b>\n"
+                        f"<b>Files:</b> <code>{_fwd}</code> / <code>{end_id if end_id > 0 else '?'}</code>\n"
+                        f"⏳ <b>ETA:</b> {_eta_str}\n\n"
+                        f"<i>Powered by Arya Forward Bot</i>"
+                    )
+                    await client.edit_message_text(to_chat, mj_prog_msg_id, _prog_txt, parse_mode="html")
+                except Exception:
+                    pass
+
     except asyncio.CancelledError:
         logger.info(f"[MultiJob {job_id}] Cancelled")
         await _mj_update(job_id, status="stopped")
+        if client and mj_prog_msg_id:
+            try:
+                fj = await _mj_get(job_id)
+                _fwd = fj.get("forwarded", 0) if fj else 0
+                await client.edit_message_text(to_chat, mj_prog_msg_id, _mj_prog_text(_fwd, mj_total, "stopped"), parse_mode="html")
+                await client.unpin_chat_message(to_chat, mj_prog_msg_id)
+                async def _del_cancelled_prog():
+                    await asyncio.sleep(180)
+                    try: await client.delete_messages(to_chat, mj_prog_msg_id)
+                    except Exception: pass
+                asyncio.create_task(_del_cancelled_prog())
+            except Exception: pass
     except Exception as e:
         logger.error(f"[MultiJob {job_id}] Fatal: {e}")
         await _mj_update(job_id, status="error", error=str(e))
+        if client and mj_prog_msg_id:
+            try:
+                fj = await _mj_get(job_id)
+                _fwd = fj.get("forwarded", 0) if fj else 0
+                await client.edit_message_text(to_chat, mj_prog_msg_id, _mj_prog_text(_fwd, mj_total, "error"), parse_mode="html")
+            except Exception: pass
     finally:
         _mj_tasks.pop(job_id, None)
         _mj_paused.pop(job_id, None)
