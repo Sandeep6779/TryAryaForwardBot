@@ -170,11 +170,14 @@ async def sl_callback(bot, query):
         asyncio.create_task(_create_share_flow(bot, user_id))
 
 async def _build_share_links(bot, user_id, sj, info_msg):
+    # Immediately acknowledge to unfreeze the user's keyboard
+    sts = await info_msg.reply_text("<i>⏳ Initializing share worker...</i>", reply_markup=ReplyKeyboardRemove())
+    
     try:
         # Check token aggressively
         token = await db.get_share_bot_token()
         if not token:
-            return await bot.send_message(user_id, "❌ You must set the Share Bot Token in /settings first!", reply_markup=ReplyKeyboardRemove())
+            return await sts.edit_text("❌ You must set the Share Bot Token in /settings first!")
         
         import plugins.share_bot as share_mod
         if not share_mod.share_client or not getattr(share_mod.share_client, 'is_connected', False):
@@ -183,7 +186,7 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             except Exception: pass
             
         if not share_mod.share_client or not getattr(share_mod.share_client, 'is_connected', False):
-            return await bot.send_message(user_id, "❌ Share Bot failed to start. Review terminal logs.", reply_markup=ReplyKeyboardRemove())
+            return await sts.edit_text("❌ Share Bot failed to start. Review terminal logs.")
             
         bot_usr = share_mod.share_client.me.username if share_mod.share_client.me else "ShareBot"
         
@@ -193,13 +196,19 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             from plugins.test import start_clone_bot
             bot_info = await db.get_bot(sj['bot_id'])
             if not bot_info:
-                return await bot.send_message(user_id, "❌ Worker account not found in DB.", reply_markup=ReplyKeyboardRemove())
+                return await sts.edit_text("❌ Worker account not found in DB.")
             worker = await start_clone_bot(_CLIENT.client(bot_info))
             
         if not worker:
-            return await bot.send_message(user_id, "❌ Failed to start worker account.", reply_markup=ReplyKeyboardRemove())
+            return await sts.edit_text("❌ Failed to start worker account.")
 
-        sts = await info_msg.reply_text("<i>⏳ Scanning database and generating mathematically grouped batches...</i>", reply_markup=ReplyKeyboardRemove())
+        await sts.edit_text("<i>⏳ Hydrating session cache and scanning database...</i>")
+        
+        # 🚨 CRITICAL FIX: Force Pyrogram to learn the access_hash of the private channels.
+        # In-memory sessions or newly restarted bots do not magically know `-100x` channels unless they fetch dialogs.
+        try:
+            async for _ in worker.get_dialogs(limit=50): pass
+        except Exception: pass
         
         current_id = sj['start_id']
         end_ep = sj['end_id']
@@ -270,7 +279,7 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         await sts.edit_text(f"<b>✅ Completed!</b>\n\nGenerated ({post_count}) structured posts containing {len(raw_buttons)} protected links mapped to @{bot_usr}.")
         
     except Exception as e:
-        await bot.send_message(user_id, f"<b>Error during linking:</b>\n<code>{e}</code>", reply_markup=ReplyKeyboardRemove())
+        await sts.edit_text(f"<b>Error during linking:</b>\n<code>{e}</code>")
     finally:
         if user_id in new_share_job:
             del new_share_job[user_id]
