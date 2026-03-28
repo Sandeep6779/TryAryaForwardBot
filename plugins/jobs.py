@@ -95,11 +95,14 @@ def _passes_filters(msg, disabled_types: list) -> bool:
     """Return True if message passes the user's content-type filters."""
     if msg.empty or msg.service:
         return False
-        
+    
     if 'links' in disabled_types:
         import re
         text = msg.text or msg.caption or ""
-        if text and re.search(r'(https?://\S+|www\.\S+|t\.me/\S+)', text, flags=re.IGNORECASE):
+        has_link = bool(text and re.search(r'(https?://\S+|www\.\S+|t\.me/\S+)', text, flags=re.IGNORECASE))
+        # Only skip pure TEXT-only messages that are nothing but a link.
+        # Media files always pass through — the link will be stripped from their caption in _forward_message.
+        if has_link and not msg.media:
             return False
 
     checks = [
@@ -481,7 +484,7 @@ async def _run_job(job_id: str, user_id: int):
                 
                 if not valid:
                     consecutive_empty += 1
-                    if consecutive_empty >= 50:
+                    if consecutive_empty >= 200:  # 200 * 200 IDs = 40,000 IDs gap before giving up
                         logger.info(f"[Job {job_id}] Done — no more messages after {batch_cursor}")
                         break
                 else:

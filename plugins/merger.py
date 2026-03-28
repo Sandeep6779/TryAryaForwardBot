@@ -366,33 +366,114 @@ def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=No
         cmd2 = ["ffmpeg","-y","-threads","1"]
         eff_cover = video_cover or cover  # use video_cover if available
         if make_video and eff_cover and os.path.exists(eff_cover) and mtype == "audio":
-            if outro_cover:
+            if outro_cover and len([o for o in (outro_cover if isinstance(outro_cover, list) else [outro_cover]*4) if isinstance(o, str) and os.path.exists(o)]) == 4:
                 outros = outro_cover if isinstance(outro_cover, list) else [outro_cover] * 4
                 valid_outros = [o for o in outros if isinstance(o, str) and os.path.exists(o)]
-                
-                if len(valid_outros) == 4:
-                    td = total_duration if total_duration else 3600*10
-                    td = td / max(speed, 0.1)
-                    interval = max(10, (td - 20) / 4)
-                    with open(vconcat_txt, "w", encoding="utf-8") as f:
-                        for idx in range(4):
-                            f.write(f"file '{os.path.abspath(eff_cover).replace(chr(92), '/')}'\n")
-                            f.write(f"duration {interval:.1f}\n")
-                            f.write(f"file '{os.path.abspath(valid_outros[idx]).replace(chr(92), '/')}'\n")
-                            f.write(f"duration 5.0\n")
-                        f.write(f"file '{os.path.abspath(eff_cover).replace(chr(92), '/')}'\n")
-                        f.write(f"duration 36000.0\n")
-                    cmd2 += ["-f", "concat", "-safe", "0", "-i", vconcat_txt]
+
+                # ══ Step 1: Merge audio only to get the EXACT real duration ══
+                tmp_audio = output_path + ".tmp_audio.m4a"
+                audio_cmd = ["ffmpeg","-y","-threads","1","-f","concat","-safe","0","-i",lst]
+                if atempo: audio_cmd += ["-af", atempo]
+                audio_cmd += ["-vn","-c:a","aac","-b:a","192k", tmp_audio]
+                r_audio = subprocess.run(audio_cmd, capture_output=True, text=True, timeout=7200)
+                if r_audio.returncode != 0 or not os.path.exists(tmp_audio):
+                    return False, "Audio merge failed: " + r_audio.stderr[-400:]
+
+                real_dur = _get_duration(tmp_audio)
+                if real_dur <= 0:
+                    real_dur = total_duration / max(speed, 0.1) if total_duration else 3600 * 5
+
+                # ══ Step 2: Evenly space 4 outros across the audio duration ══
+                # Each outro is 5 seconds; place them at 25%, 50%, 75%, and 95% marks
+                outro_positions = [
+                    max(0, real_dur * 0.25),
+                    max(0, real_dur * 0.50),
+                    max(0, real_dur * 0.75),
+                    max(0, real_dur * 0.95 - 5),
+                ]
+
+                # ══ Step 3: Build overlay filter chain ══
+                # Base: loop cover image for real_dur seconds at 1 fps
+                # Then overlay each outro with 'enable' timing
+                # [0:v] = looped cover  [1:v]..[4:v] = 4 outro images
+                filter_parts = []
+                prev_label = "[0:v]"
+                for i, (outro_path, pos) in enumerate(zip(valid_outros, outro_positions)):
+                    end_t = pos + 5.0
+                    out_label = f"[v{i}]" if i < 3 else "[vout]"
+                    # Scale outro to same 1280x720
+                    filter_parts.append(
+                        f"[{i+1}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+                        f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p[outro{i}];"
+                        f"{prev_label}[outro{i}]overlay=0:0:enable='between(t,{pos:.1f},{end_t:.1f})'{out_label}"
+                    )
+                    prev_label = out_label
+
+                vf_complex = "; ".join(filter_parts)
+                # Main cover scale must match
+                cover_scale = f"[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p[0:v]"
+
+                # Build full filter_complex
+                full_filter = f"{vf_complex}"
+
+                # Build input list: cover + 4 outro images + audio
+                cmd2 = ["ffmpeg","-y","-threads","1"]
+                cmd2 += ["-loop","1","-framerate","1","-t",str(real_dur),"-i", os.path.abspath(eff_cover)]
+                for op in valid_outros:
+                    cmd2 += ["-loop","1","-framerate","1","-t","5","-i", os.path.abspath(op)]
+                cmd2 += ["-i", tmp_audio]
+
+                # Filter: scale cover, then overlay outros
+                n_outros = len(valid_outros)  # 4
+                audio_input_idx = n_outros + 1
+                # Simple filter_complex: scale cover, then overlay each outro
+                fc_parts = []
+                # Scale the cover first
+                fc_parts.append(
+                    f"[0:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+                    f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p[base]"
+                )
+                prev = "[base]"
+                for i, pos in enumerate(outro_positions):
+                    end_t = pos + 5.0
+                    out_lbl = f"[ov{i}]" if i < n_outros - 1 else "[finalv]"
+                    fc_parts.append(
+                        f"[{i+1}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+                        f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p[os{i}];"
+                        f"{prev}[os{i}]overlay=0:0:enable='between(t,{pos:.1f},{end_t:.1f})'{out_lbl}"
+                    )
+                    prev = out_lbl
+
+                cmd2 += ["-filter_complex", ";".join(fc_parts)]
+                cmd2 += ["-map", "[finalv]", "-map", f"{audio_input_idx}:a"]
+                cmd2 += [
+                    "-c:v","libx264","-preset","superfast","-tune","stillimage",
+                    "-c:a","aac","-b:a","192k",
+                    "-movflags","+faststart",
+                    "-max_muxing_queue_size","2048"
+                ]
+                if metadata:
+                    for k, v in (metadata or {}).items():
+                        if v: cmd2 += ["-metadata", f"{k}={v}"]
+                abs_output = os.path.abspath(output_path)
+                cmd2.append(abs_output)
+                r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=14400)
+                try:
+                    if os.path.exists(tmp_audio): os.remove(tmp_audio)
+                except Exception: pass
+                if r2.returncode == 0 and os.path.exists(abs_output) and os.path.getsize(abs_output) > 100:
+                    return True, ""
                 else:
-                    cmd2 += ["-loop", "1", "-framerate", "1", "-i", os.path.abspath(eff_cover)]
+                    return False, r2.stderr[-800:]
             else:
                 cmd2 += ["-loop", "1", "-framerate", "1", "-i", os.path.abspath(eff_cover)]
-            
+        else:
+            cmd2 += ["-loop", "1", "-framerate", "1", "-i", os.path.abspath(eff_cover)] if (make_video and eff_cover and os.path.exists(eff_cover) and mtype == "audio") else []
+
+        if make_video and eff_cover and os.path.exists(eff_cover) and mtype == "audio" and not outro_cover:
             cmd2 += ["-f","concat","-safe","0","-i",lst]
             if atempo: cmd2 += ["-af", atempo]
             # CRITICAL: -movflags +faststart is REQUIRED for YouTube to be able to process the file.
-            # Without this, YouTube shows 'Upload failed: Can't process file'.
-            # format=yuv420p ensures wide browser/device compatibility.
             cmd2 += [
                 "-c:v","libx264","-preset","superfast","-tune","stillimage",
                 "-c:a","aac","-b:a","192k",

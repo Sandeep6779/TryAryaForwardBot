@@ -141,6 +141,14 @@ def _msg_in_topic(msg, from_thread_id: int) -> bool:
 def _passes_filters(msg, disabled_types: list) -> bool:
     if msg.empty or msg.service:
         return False
+    if 'links' in disabled_types:
+        import re
+        text = msg.text or msg.caption or ""
+        has_link = bool(text and re.search(r'(https?://\S+|www\.\S+|t\.me/\S+)', text, flags=re.IGNORECASE))
+        # Only drop pure text-only messages that contain links.
+        # Media messages always pass through — links get stripped from captions during send.
+        if has_link and not msg.media:
+            return False
     checks = [
         ('text',      lambda m: m.text and not m.media),
         ('audio',     lambda m: m.audio),
@@ -301,8 +309,32 @@ async def _run_task_job(job_id: str, user_id: int):
         end_id    = job.get("end_id", 0)   # 0 = no fixed end (all messages)
         current   = job.get("current_id", job.get("start_id", 1))
 
-        await _tj_update(job_id, status="running", error="")
+        await _tj_update(job_id, status="running", error="", start_time=time.time(), forwarded=job.get("forwarded", 0))
         logger.info(f"[TaskJob {job_id}] Started. current={current} end={end_id}")
+
+        job_start_time = time.time()
+        forwarded_at_start = job.get("forwarded", 0)
+
+        # ── Destination progress bar setup ──────────────────────────────────
+        to_chat_for_prog = job.get("to_chat")
+        prog_msg_id = job.get("prog_msg_id", None)
+        if not prog_msg_id:
+            try:
+                sent = await client.send_message(to_chat_for_prog,
+                    "<b>📦 Task Job Starting...</b>\n<code>[░░░░░░░░░░] 0%</code>\n\n<i>Please wait...</i>")
+                prog_msg_id = sent.id
+                await _tj_update(job_id, prog_msg_id=prog_msg_id)
+                try: await client.pin_chat_message(to_chat_for_prog, prog_msg_id, disable_notification=True)
+                except Exception: pass
+            except Exception:
+                pass
+
+        def _make_prog_bar(pct: int) -> str:
+            filled = pct // 10
+            bar = "█" * filled + "░" * (10 - filled)
+            return f"[{bar}] {pct}%"
+
+        last_prog_update = 0.0
 
         while True:
             # ── Pause check ────────────────────────────────────────────────
@@ -488,9 +520,59 @@ async def _run_task_job(job_id: str, user_id: int):
 
             await _tj_update(job_id, current_id=current)
 
+            # ── Update destination progress bar with live ETA ──────────────────
+            now_t = time.time()
+            if prog_msg_id and to_chat_for_prog and (now_t - last_prog_update) >= 30:
+                last_prog_update = now_t
+                try:
+                    fresh_j   = await _tj_get(job_id)
+                    total_fwd = fresh_j.get("forwarded", 0) if fresh_j else 0
+                    start_id  = job.get("start_id", 1)
+                    _end_id   = job.get("end_id", 0)
+
+                    # Percentage (only if end_id is known)
+                    pct = 0
+                    if _end_id > 0 and current > start_id:
+                        pct = min(99, int(((current - start_id) / max(1, _end_id - start_id)) * 100))
+
+                    # ETA based on msgs/sec since job start
+                    elapsed = max(1, now_t - job_start_time)
+                    delta_fwd = total_fwd - forwarded_at_start
+                    speed_mps = delta_fwd / elapsed  # messages per second
+                    if speed_mps > 0 and _end_id > 0:
+                        remaining_msgs = max(0, _end_id - current)
+                        eta_secs = remaining_msgs / speed_mps
+                        eta_h = int(eta_secs // 3600)
+                        eta_m = int((eta_secs % 3600) // 60)
+                        eta_str = f"{eta_h}h {eta_m}m" if eta_h else f"{eta_m}m"
+                    elif speed_mps > 0:
+                        eta_str = "Live (no end)"
+                    else:
+                        eta_str = "Starting..."
+
+                    bar = _make_prog_bar(pct)
+                    prog_text = (
+                        f"<b>📦 Task Job Running</b>\n"
+                        f"<code>{bar}</code>\n\n"
+                        f"✅ Forwarded: {total_fwd}\n"
+                        f"📍 At msg: {current}\n"
+                        f"⏳ ETA: {eta_str}"
+                    )
+                    await client.edit_message_text(to_chat_for_prog, prog_msg_id, prog_text)
+                except Exception:
+                    pass
+
     except asyncio.CancelledError:
         logger.info(f"[TaskJob {job_id}] Cancelled")
         await _tj_update(job_id, status="stopped")
+        # Mark progress bar stopped
+        if prog_msg_id and to_chat_for_prog:
+            try:
+                fresh_j = await _tj_get(job_id)
+                total_fwd = fresh_j.get("forwarded", 0) if fresh_j else 0
+                await client.edit_message_text(to_chat_for_prog, prog_msg_id,
+                    f"<b>⏹ Task Job Stopped</b>\n<code>[░░░░░░░░░░] — Paused</code>\n\n✅ Forwarded: {total_fwd}")
+            except Exception: pass
     except Exception as e:
         logger.error(f"[TaskJob {job_id}] Fatal: {e}")
         await _tj_update(job_id, status="error", error=str(e))
