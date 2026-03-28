@@ -85,35 +85,38 @@ async def _create_share_flow(bot, user_id):
 
         markup = ReplyKeyboardMarkup([[KeyboardButton("/cancel")]], resize_keyboard=True, one_time_keyboard=True)
             
-        def parse_id(text: str) -> int:
-            text = text.strip().rstrip('/')
+        def parse_id(msg) -> int:
+            if getattr(msg, 'forward_from_message_id', None):
+                return msg.forward_from_message_id
+                
+            text = (msg.text or msg.caption or "").strip().rstrip('/')
             if text.isdigit(): return int(text)
             if "t.me/" in text:
                 parts = text.split('/')
                 if parts[-1].isdigit(): return int(parts[-1])
-            raise ValueError("Invalid Message ID or Link")
+            raise ValueError("Invalid Message ID or Link (must be forwarded or contain ID)")
             
         msg_story = await _ask(bot, user_id, 
             "<b>❪ STEP 4: STORY NAME ❫</b>\n\nEnter the clean name of the Series/Story (e.g. <code>TDMB</code>):", 
             reply_markup=markup
         )
-        if msg_story.text == "/cancel": return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
-        new_share_job[user_id]['story'] = msg_story.text.strip()
+        if (msg_story.text or "") == "/cancel": return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
+        new_share_job[user_id]['story'] = (msg_story.text or msg_story.caption or "").strip()
         
         msg_start = await _ask(bot, user_id, 
             "<b>❪ STEP 5: START MESSAGE ❫</b>\n\nForward the first message, send its Message ID, or paste its Link (e.g. <code>https://t.me/c/123/456</code>):", 
             reply_markup=markup
         )
-        if msg_start.text == "/cancel": return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
-        start_id = parse_id(msg_start.text)
+        if (msg_start.text or "") == "/cancel": return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
+        start_id = parse_id(msg_start)
         new_share_job[user_id]['start_id'] = start_id
         
         msg_end = await _ask(bot, user_id, 
             "<b>❪ STEP 6: LAST MESSAGE ❫</b>\n\nForward the last message, send its Msg ID, or paste its Link:", 
             reply_markup=markup
         )
-        if msg_end.text == "/cancel": return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
-        end_id = parse_id(msg_end.text)
+        if (msg_end.text or "") == "/cancel": return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
+        end_id = parse_id(msg_end)
         new_share_job[user_id]['end_id'] = end_id
         
         if start_id > end_id:
@@ -125,9 +128,10 @@ async def _create_share_flow(bot, user_id):
             "<b>❪ STEP 7: EPISODES PER LINK ❫</b>\n\nHow many files should be grouped in one link button?\nExample: <code>20</code>", 
             reply_markup=markup
         )
-        if msg_batch.text == "/cancel": return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
+        if (msg_batch.text or "") == "/cancel": return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
         
-        batch_size = int(msg_batch.text.strip())
+        raw_b = (msg_batch.text or msg_batch.caption or "20").strip()
+        batch_size = int(raw_b) if raw_b.isdigit() else 20
         if batch_size < 1: batch_size = 20
         new_share_job[user_id]['batch_size'] = batch_size
         
@@ -214,10 +218,6 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         
         # 🚨 CRITICAL BUG REMEDIATION: Force Pyrogram Worker to organically learn the access_hash.
         # This replaces the failed Wake-Up Broadcast by manually caching the peer into the worker's storage!
-        # We directly use the MAIN Bot (Arya) to scan the Database channel, avoiding Worker memory issues.
-        # But if the Main Bot's local `.session` SQLite file was deleted during a server restart, 
-        # it will throw ChannelInvalid because it lost the access_hash mapping from MongoDB's IDs!
-            
         protect = await db.get_share_protect(user_id)
         auto_del = await db.get_share_autodelete(user_id)
         
@@ -236,22 +236,24 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             
             valid_ids = []
             
-            # 🚨 MONGODB SPLIT-BRAIN FIX: 
-            # Force the primary MAIN Bot to scan the DB Channel!
             try:
-                messages = await bot.get_messages(sj['source'], msg_ids)
+                # 🚨 CRITICAL API RULE: The WORKER (ShareBot/UserBot) MUST scan the channel!
+                # The Main Bot (Arya) is just a Management system and throws CHANNEL_PRIVATE because it lacks access.
+                messages = await worker.get_messages(sj['source'], msg_ids)
             except (pyrogram.errors.ChannelInvalid, pyrogram.errors.PeerIdInvalid):
+                # If the Worker is an in-memory ShareBot, it completely forgets the -100x
+                # database integer ID whenever you restart your server!
                 return await safe_edit(
-                    f"<b>❌ FATAL: Bot SQLite Session Amnesia Detected!</b>\n\n"
-                    f"The main bot's internal cache was wiped during a restart, so it forgot the access_hash for the Source Channel (ID: <code>{sj['source']}</code>).\n\n"
-                    f"<b>🛠 HOW TO FIX THIS PERMANENTLY:</b>\n"
+                    f"<b>❌ FATAL: Pyrogram Session Amnesia Detected!</b>\n\n"
+                    f"The Worker account has forgotten the hidden 64-bit encryption key to your Database Channel (<code>{sj['source']}</code>) because its memory reset on startup.\n\n"
+                    f"<b>🛠 HOW TO FIX THIS IN 5 SECONDS:</b>\n"
                     f"1. Open your Source Database channel on Telegram.\n"
-                    f"2. Forward any 1 random message from it directly to me.\n"
-                    f"3. Come back and click 'Generate & Group Links' again!\n\n"
-                    f"<i>(Forwarding the message instantly forces Telegram to rebuild the bot's lost local peer cache.)</i>"
+                    f"2. Type the word '<code>hello</code>' (or send any sticker) directly <b>inside</b> that channel.\n"
+                    f"3. Come back and click '🚀 Generate & Group Links' again!\n\n"
+                    f"<i>(Sending a message inside the channel forces the Telegram Server to broadcast an update to all members, permanently repairing the Share Bot's broken memory!)</i>"
                 )
             except Exception as e:
-                return await safe_edit(f"<b>❌ Generation Error:</b> {e}")
+                return await safe_edit(f"<b>❌ Scan Error (Is ShareBot an Admin in the DB?):</b> {e}")
                 
             for m in messages:
                 if m.empty or m.service: continue
