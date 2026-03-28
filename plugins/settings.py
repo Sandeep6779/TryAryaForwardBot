@@ -297,7 +297,15 @@ async def settings_query(bot, query):
          await query.answer(f"Removed: {removed.get('title','?')}")
      return await edit_settings(client, query, "sharefsub")
 
-wait query.answer("Auto-Delete Timer Updated!")
+  elif type == "share_autodelete":
+     opts   = [0, 5, 10, 30, 60, 1440]           # minutes; 0 = OFF
+     labels = ["OFF","5m","10m","30m","1h","24h"]
+     cur    = await db.get_share_autodelete_global()
+     try:    cur_idx = opts.index(cur)
+     except: cur_idx = 0
+     nxt_idx = (cur_idx + 1) % len(opts)
+     await db.set_share_autodelete_global(opts[nxt_idx])
+     await query.answer(f"Auto-Delete: {labels[nxt_idx]}")
      return await edit_settings(client, query, "sharebot")
 
   elif type == "editsharebot":
