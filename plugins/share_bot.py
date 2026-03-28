@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from pyrogram import Client, filters
+from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from pyrogram.errors import UserNotParticipant
 from database import db
@@ -102,11 +102,6 @@ async def start_share_bot(token=None):
         # Register Handlers locally
         @share_client.on_message(filters.command("start") & filters.private)
         async def on_start(c, m):
-            from pyrogram import enums
-            # Patching enums locally inside the handler due to dynamic scope
-            import pyrogram.enums as enums_mod
-            global enums
-            enums = enums_mod
             await process_start(c, m)
 
         await share_client.start()
