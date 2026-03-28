@@ -268,19 +268,38 @@ async def _build_share_links(bot, user_id, sj, info_msg):
 
             # Step 2: Fetch messages via raw API on the MAIN BOT with the resolved peer
             # This completely bypasses Pyrogram's peer resolution on the worker side
-            try:
-                raw_result = await bot.invoke(
-                    ChannelGetMessages(
-                        channel=db_peer,
-                        id=[InputMessageID(id=mid) for mid in msg_ids]
+            for attempt in range(5):
+                try:
+                    raw_result = await bot.invoke(
+                        ChannelGetMessages(
+                            channel=db_peer,
+                            id=[InputMessageID(id=mid) for mid in msg_ids]
+                        )
                     )
-                )
-                messages = raw_result.messages
-            except Exception as e:
-                return await safe_edit(
-                    f"<b>❌ Scan Error:</b> <code>{e}</code>\n\n"
-                    f"<i>Make sure the Main Bot is an admin in the database channel.</i>"
-                )
+                    messages = raw_result.messages
+                    break  # success
+                except Exception as e:
+                    err_str = str(e)
+                    # FloodWait: extract seconds and sleep automatically
+                    if "FLOOD_WAIT" in err_str or "420" in err_str:
+                        import re
+                        wait_secs = 15  # safe default
+                        m_wait = re.search(r'wait of (\d+)', err_str)
+                        if m_wait:
+                            wait_secs = int(m_wait.group(1)) + 2
+                        await safe_edit(
+                            f"<i>⏳ Telegram rate limit hit — waiting {wait_secs}s before continuing "
+                            f"(processed up to ID {current_id})...</i>"
+                        )
+                        await asyncio.sleep(wait_secs)
+                        continue  # retry
+                    # Other errors: abort
+                    return await safe_edit(
+                        f"<b>❌ Scan Error:</b> <code>{e}</code>\n\n"
+                        f"<i>Make sure the Main Bot is an admin in the database channel.</i>"
+                    )
+            else:
+                return await safe_edit("❌ Scan failed after 5 retries due to repeated FloodWait. Try again in a few minutes.")
 
 
             # Keep only real messages (skip MessageEmpty, MessageService)
