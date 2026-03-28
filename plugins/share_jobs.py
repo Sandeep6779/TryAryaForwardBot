@@ -214,18 +214,9 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         
         # 🚨 CRITICAL BUG REMEDIATION: Force Pyrogram Worker to organically learn the access_hash.
         # This replaces the failed Wake-Up Broadcast by manually caching the peer into the worker's storage!
-        try:
-            peer = await bot.resolve_peer(sj['source'])
-            # peer is an InputPeerChannel natively fetched by the MAIN bot.
-            # We inject this into the worker's local storage dynamically to bypass memory amnesia.
-            await worker.storage.update_peers([
-                (peer.channel_id, peer.access_hash, "channel", None, None)
-            ])
-            # If userbot, fetch dialogs gently anyway just in case:
-            if sj['bot_id'] != "SHAREBOT":
-                async for _ in worker.get_dialogs(limit=10): pass
-        except Exception as e:
-            print("Peer Cache Injection Failed:", e)
+        # We directly use the MAIN Bot (Arya) to scan the Database channel, avoiding Worker memory issues.
+        # But if the Main Bot's local `.session` SQLite file was deleted during a server restart, 
+        # it will throw ChannelInvalid because it lost the access_hash mapping from MongoDB's IDs!
             
         protect = await db.get_share_protect(user_id)
         auto_del = await db.get_share_autodelete(user_id)
@@ -237,16 +228,31 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         # Phase 1: Scan and create raw buttons
         raw_buttons = []
         
+        import pyrogram
+        
         while current_id <= end_ep:
             chunk_end = min(current_id + chunk_size - 1, end_ep)
             msg_ids = list(range(current_id, chunk_end + 1))
             
             valid_ids = []
             
-            # 🚨 BUG FIX: Force the primary MAIN Bot to scan the DB Channel!
-            # The worker might fail due to lack of admin privileges, causing [400 CHANNEL_INVALID]
-            # during link generation. The Main Bot NEVER fails since it initiated the job!
-            messages = await bot.get_messages(sj['source'], msg_ids)
+            # 🚨 MONGODB SPLIT-BRAIN FIX: 
+            # Force the primary MAIN Bot to scan the DB Channel!
+            try:
+                messages = await bot.get_messages(sj['source'], msg_ids)
+            except (pyrogram.errors.ChannelInvalid, pyrogram.errors.PeerIdInvalid):
+                return await safe_edit(
+                    f"<b>❌ FATAL: Bot SQLite Session Amnesia Detected!</b>\n\n"
+                    f"The main bot's internal cache was wiped during a restart, so it forgot the access_hash for the Source Channel (ID: <code>{sj['source']}</code>).\n\n"
+                    f"<b>🛠 HOW TO FIX THIS PERMANENTLY:</b>\n"
+                    f"1. Open your Source Database channel on Telegram.\n"
+                    f"2. Forward any 1 random message from it directly to me.\n"
+                    f"3. Come back and click 'Generate & Group Links' again!\n\n"
+                    f"<i>(Forwarding the message instantly forces Telegram to rebuild the bot's lost local peer cache.)</i>"
+                )
+            except Exception as e:
+                return await safe_edit(f"<b>❌ Generation Error:</b> {e}")
+                
             for m in messages:
                 if m.empty or m.service: continue
                 valid_ids.append(m.id)
