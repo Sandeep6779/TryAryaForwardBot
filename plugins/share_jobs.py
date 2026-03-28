@@ -166,15 +166,15 @@ async def sl_callback(bot, query):
         if not token:
             return await query.answer("❌ You must set the Share Bot Token in /settings first!", show_alert=True)
         
-        from plugins.share_bot import share_client
-        if not share_client:
+        import plugins.share_bot as share_mod
+        if not share_mod.share_client:
             return await query.answer("❌ Share Bot is not running. Check token in settings.", show_alert=True)
             
-        bot_usr = share_client.me.username if share_client.me else "ShareBot"
+        bot_usr = share_mod.share_client.me.username if share_mod.share_client.me else "ShareBot"
         
         if sj['bot_id'] == "SHAREBOT":
             # Direct use of the Share Bot client
-            worker = share_client
+            worker = share_mod.share_client
         else:
             from plugins.test import start_clone_bot
             worker = await start_clone_bot(_CLIENT, sj['bot_id'])
