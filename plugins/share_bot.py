@@ -101,10 +101,6 @@ async def start_share_bot():
             await sc.start()
             share_clients[b['id']] = sc
             logger.info(f"Share Bot started: @{sc.me.username} ({b['name']})")
-            
-            # Update DB with active username/id info if missing
-            if b.get('username') != sc.me.username:
-                await db.add_share_bot(b['token']) # re-adds with correct name
         except Exception as e:
             logger.error(f"Failed to start Share Bot {b['name']}: {e}")
 

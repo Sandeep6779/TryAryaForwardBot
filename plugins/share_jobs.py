@@ -310,78 +310,92 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         if not all_valid_msgs:
             return await safe_edit("❌ No files found in that range.")
 
-        # ── PARSE EPISODE NUMBERS NATIVELY ──
-        all_valid_msgs.sort(key=lambda x: x.id) # Sort chronologically
+        # ── PARSE & BUCKET EPISODES ──────────────────────────────────────────
+        all_valid_msgs.sort(key=lambda x: x.id)  # chronological
 
-        def extract_eps(msg):
+        import re as _re
+
+        def extract_ep_num(msg) -> int:
+            """
+            Returns the episode number from a message's caption/filename.
+            Returns -1 if nothing useful found.
+            Priority:
+              1. "Ep 23", "Episode 23", "Part 23", "Ch 23" etc
+              2. Range like "31-40" → take the START number
+              3. Last pure 1-4 digit number in the text
+            """
             text = (msg.caption or "") + " " + (msg.text or "")
             if msg.document and getattr(msg.document, "file_name", None):
                 text += " " + str(msg.document.file_name)
-            
-            # Match "31-40", "31 to 40", "31_40"
-            m_range = _re.search(r'\b(?:ep|episode|ch|chapter|part|audio)?\s*(\d+)\s*[-_to]+\s*(\d+)\b', text, _re.IGNORECASE)
-            if m_range:
-                s, e = int(m_range.group(1)), int(m_range.group(2))
-                if s < e and (e - s) < 500: return s, e
-            
-            m_single = _re.search(r'\b(?:ep|episode|ch|chapter|part|audio)\s*[-_.:]?\s*(\d+)\b', text, _re.IGNORECASE)
-            if m_single: return int(m_single.group(1)), int(m_single.group(1))
-            
-            numbers = _re.findall(r'\b\d{1,4}\b', text)
-            if numbers: return int(numbers[-1]), int(numbers[-1])
-            return None, None
 
-        parsed_data = [] # List of tuples: (msg_id, assigned_start, assigned_end)
-        
-        s, e = extract_eps(all_valid_msgs[0])
-        current_ep = s if s is not None else 1
-        
-        for idx, m in enumerate(all_valid_msgs):
-            if idx == 0:
-                parsed_data.append((m.id, current_ep, e if e is not None else current_ep))
-                current_ep = (e if e is not None else current_ep)
-                continue
-                
-            s, e = extract_eps(m)
-            if s is None:
-                current_ep += 1
-                parsed_data.append((m.id, current_ep, current_ep))
-            else:
-                if s <= current_ep:
-                    if s != e:
-                        val_s = current_ep + 1
-                        val_e = current_ep + 1 + (e - s)
-                        parsed_data.append((m.id, val_s, val_e))
-                        current_ep = val_e
-                    else:
-                        current_ep += 1
-                        parsed_data.append((m.id, current_ep, current_ep))
-                else:
-                    parsed_data.append((m.id, s, e))
-                    current_ep = e
+            # Named keyword + number (highest priority)
+            m = _re.search(r'\b(?:ep|episode|ch|chapter|part|audio)\s*[-_.:]?\s*(\d{1,4})\b', text, _re.IGNORECASE)
+            if m:
+                return int(m.group(1))
 
-        first_ep_num = parsed_data[0][1]
-        last_ep_num  = parsed_data[-1][2]
+            # Range pattern: "31-40", "31_40", "31 to 40" → take start
+            m2 = _re.search(r'\b(\d{1,4})\s*[-_to]+\s*(\d{1,4})\b', text, _re.IGNORECASE)
+            if m2:
+                s, e = int(m2.group(1)), int(m2.group(2))
+                if s < e and (e - s) < 200:
+                    return s
 
-        buckets = {} # (w_start, w_end): [msg_ids...]
-        
-        for m_id, a_s, a_e in parsed_data:
-            for ep in range(a_s, a_e + 1):
-                if ep < 1: continue
-                # Calculate strictly aligned mathematical bucket interval (e.g. 1-10, 11-20)
-                b_s = ((ep - 1) // batch_size) * batch_size + 1
-                b_e = b_s + batch_size - 1
-                b_key = (b_s, b_e)
-                
-                if b_key not in buckets:
-                    buckets[b_key] = []
-                if m_id not in buckets[b_key]:
-                    buckets[b_key].append(m_id)
+            # Last 1-4 digit number  (generic fallback — "204.mp3" → 204)
+            nums = _re.findall(r'\b\d{1,4}\b', text)
+            if nums:
+                return int(nums[-1])
+
+            return -1
+
+        # Build ep_num → [msg_ids]  (duplicates accumulate naturally)
+        ep_to_msgs: dict = {}  # ep_num → list of msg_ids
+
+        for m in all_valid_msgs:
+            ep = extract_ep_num(m)
+            if ep < 1:
+                continue  # completely un-parseable — skip
+            if ep not in ep_to_msgs:
+                ep_to_msgs[ep] = []
+            ep_to_msgs[ep].append(m.id)
+
+        if not ep_to_msgs:
+            return await safe_edit("❌ Could not extract any episode numbers from the scanned messages.")
+
+        # Sort ep_to_msgs for reporting
+        all_ep_nums = sorted(ep_to_msgs.keys())
+        first_ep_num = all_ep_nums[0]
+        last_ep_num  = all_ep_nums[-1]
+
+        # ── Build strict buckets ─────────────────────────────────────────────
+        # Bucket key = (b_start, b_end) where:
+        #   b_start = ((ep-1) // batch_size) * batch_size + 1   → e.g. ep 7, batch 10 → b_start=1
+        #   b_end   = b_start + batch_size - 1                  → b_end=10
+        # Each episode's msg_ids are added into its bucket only (no cross-bucket pollution).
+        # The last bucket's label is capped at the real last episode.
+
+        buckets: dict = {}  # (b_start, b_end) → list of msg_ids (deduped)
+
+        for ep in all_ep_nums:
+            b_s = ((ep - 1) // batch_size) * batch_size + 1
+            b_e = b_s + batch_size - 1
+            key = (b_s, b_e)
+            if key not in buckets:
+                buckets[key] = []
+            for mid in ep_to_msgs[ep]:
+                if mid not in buckets[key]:
+                    buckets[key].append(mid)
 
         raw_buttons = []
-        for (w_start, w_end), batch in sorted(buckets.items()):
-            if not batch: continue
-            
+        sorted_buckets = sorted(buckets.items())
+
+        for idx, ((w_start, w_end), batch) in enumerate(sorted_buckets):
+            if not batch:
+                continue
+
+            # Cap the last bucket's label so it shows actual last ep, not rounded-up
+            is_last = (idx == len(sorted_buckets) - 1)
+            display_end = min(w_end, last_ep_num) if is_last else w_end
+
             uuid_str = str(uuid.uuid4()).replace('-', '')[:16]
             await db.save_share_link(
                 uuid_str, batch, source_chat_id,
@@ -389,12 +403,11 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             )
             url = f"https://t.me/{bot_usr}?start={uuid_str}"
 
-            # Strictly display numbers only per user request
-            btn_text = str(w_start) if batch_size == 1 else f"{w_start}\u2013{w_end}"
+            btn_text = str(w_start) if batch_size == 1 else f"{w_start}\u2013{display_end}"
             raw_buttons.append({
                 "btn":      InlineKeyboardButton(btn_text, url=url),
                 "ep_start": w_start,
-                "ep_end":   w_end,
+                "ep_end":   display_end,
             })
 
 
@@ -448,7 +461,7 @@ async def _build_share_links(bot, user_id, sj, info_msg):
 
         await safe_edit(
             f"<b>✅ Share Links Generated!</b>\n\n"
-            f"📊 <b>Files processed:</b> {len(parsed_data)}\n"
+            f"📊 <b>Episodes found:</b> {len(ep_to_msgs)}\n"
             f"🎯 <b>Episode range:</b> {first_ep_num}–{last_ep_num}\n"
             f"🔗 <b>Link buttons created:</b> {len(raw_buttons)}\n"
             f"📝 <b>Posts sent to channel:</b> {post_count}\n\n"

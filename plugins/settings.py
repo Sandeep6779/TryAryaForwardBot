@@ -160,17 +160,17 @@ async def settings_query(bot, query):
      else:                   adtxt = f"⏱ {auto_delete // 60}h"
 
      buttons = [
-         [InlineKeyboardButton(f'🛡 Protection: {ptxt}', callback_data='settings#sharebotprotect'),
-          InlineKeyboardButton(f'⏱ Auto-Delete: {adtxt}', callback_data='settings#sharebotautodel')],
-         [InlineKeyboardButton(f'🗂 Buttons/Post: {bpp}', callback_data='settings#sharebot_bpp'),
-          InlineKeyboardButton(f'📢 Force-Subscribe ({len(fsub_chs)}/6)', callback_data='settings#sharefsub')],
-         [InlineKeyboardButton('📖 Welcome Msg', callback_data='settings#sbt_welcome'),
-          InlineKeyboardButton('🗑 Delete Msg', callback_data='settings#sbt_delete')],
-         [InlineKeyboardButton('📝 Custom Caption', callback_data='settings#sbt_caption'),
-          InlineKeyboardButton('✅ Success Msg', callback_data='settings#sbt_success')],
-         [InlineKeyboardButton('🔐 FSub Message', callback_data='settings#sbt_fsub'),
-          InlineKeyboardButton(f'🤖 Share Bots ({len(bots_list)})', callback_data='settings#sbt_manage')],
-         [InlineKeyboardButton('↩ Back', callback_data='settings#main')]
+         [InlineKeyboardButton(f'🛡 Pʀᴏᴛᴇᴄᴛɪᴏɴ: {ptxt}', callback_data='settings#sharebotprotect'),
+          InlineKeyboardButton(f'⏱ Aᴜᴛᴏ-Dᴇʟᴇᴛᴇ: {adtxt}', callback_data='settings#sharebotautodel')],
+         [InlineKeyboardButton(f'🗂 Bᴛɴs/Pᴏsᴛ: {bpp}', callback_data='settings#sharebot_bpp'),
+          InlineKeyboardButton(f'📢 Fᴏʀᴄᴇ-Sᴜʙ ({len(fsub_chs)}/6)', callback_data='settings#sharefsub')],
+         [InlineKeyboardButton('📖 Wᴇʟᴄᴏᴍᴇ Mꜱɢ', callback_data='settings#sbt_welcome'),
+          InlineKeyboardButton('🗑 Dᴇʟᴇᴛᴇ Mꜱɢ', callback_data='settings#sbt_delete')],
+         [InlineKeyboardButton('📝 Cᴜsᴛᴏᴍ Cᴀᴘᴛɪᴏɴ', callback_data='settings#sbt_caption'),
+          InlineKeyboardButton('✅ Sᴜᴄᴄᴇss Mꜱɢ', callback_data='settings#sbt_success')],
+         [InlineKeyboardButton('🔐 Fsᴜʙ Mꜱɢ', callback_data='settings#sbt_fsub'),
+          InlineKeyboardButton(f'🤖 Sʜᴀʀᴇ Bᴏᴛs ({len(bots_list)})', callback_data='settings#sbt_manage')],
+         [InlineKeyboardButton('↩ Bᴀᴄᴋ', callback_data='settings#main')]
      ]
      txt = (
          f"<b>❪ SHARE BOT CONFIGURATION ❫</b>\n\n"
