@@ -333,75 +333,66 @@ async def _build_share_links(bot, user_id, sj, info_msg):
 
 
         _NOISE_RE = [
-            # Resolutions MUST have p/i suffix — bare '360', '480' etc. could be episode numbers!
+            # Resolutions MUST have p/i suffix
             _re.compile(r'(?i)\b(?:360|480|720|1080|2160|4k)[pi]\b'),
-            # Codec/format labels (only as whole words, NOT inside filenames)
+            # Codec/format labels
             _re.compile(r'(?i)\b(?:x264|x265|h\.?264|h\.?265|hevc|avc|aac|mp[34]|m4a|m4v|m4b|mkv|avi|mov|wmv|flv|flac|opus|ogg|wav|webm|3gp|mts|m2ts)\b'),
-            # Calendar years (4 digits starting with 19xx or 20xx)
+            # Calendar years
             _re.compile(r'(?<!\d)(?:19[0-9]{2}|20[0-9]{2})(?!\d)'),
             # File sizes
             _re.compile(r'(?i)\b\d+(?:\.\d+)?\s*(?:mb|gb|kb)\b'),
             # Track/season-episode labels like S01E05
-            _re.compile(r'(?i)\b(?:track|s[0-9]{1,2}e[0-9]{1,2})(?=\s|$)'),
-            # Trailing duplicate brackets from OS/Telegram e.g., (1), (2), [3]
+            _re.compile(r'(?i)\b(?:s[0-9]{1,2}e[0-9]{1,2})(?=\s|$)'),
+            # Trailing duplicate brackets from OS/Telegram e.g., (1), [3]
             _re.compile(r'\(\s*\d+\s*\)|\[\s*\d+\s*\]'),
+            # Common text noise
+            _re.compile(r'(?i)\b(?:copy|final|v\d+|new|latest|audio|track)\b'),
         ]
 
         def _clean(text: str) -> str:
             for rx in _NOISE_RE:
-                text = rx.sub('', text)
+                text = rx.sub(' ', text)
+            # Normalize common delimiters to spaces to break words apart
+            text = _re.sub(r'[_#\.]', ' ', text)
             return text
-
-        def _extract_from_text(text: str):
-            """
-            Given a pre-cleaned (or raw) string, extract episode number.
-            Returns (ep, ep, False) or (start, end, True) for a range, or None.
-            """
-            c = _clean(text)
-
-            # 1. Explicit keyword: "Ep 23", "Episode 23", "Part 23", "Ch 2"
-            m = _re.search(
-                r'(?i)\b(?:ep(?:isode)?|ch(?:apter)?|s\d{1,2}e)\s*[-_.]?\s*(\d{1,4})(?!\d)', c)
-            if m:
-                n = int(m.group(1))
-                if 0 < n < 5000: return (n, n, False)
-
-            # 2. keyword glued: "ep23", "ch4"
-            m2 = _re.search(r'(?i)(?:ep|ch)(\d{1,4})(?!\d)', c)
-            if m2:
-                n = int(m2.group(1))
-                if 0 < n < 5000: return (n, n, False)
-
-            # 3. All standalone numbers
-            nums = [int(x) for x in _re.findall(r'(?<!\d)(\d{1,4})(?!\d)', c) if 0 < int(x) < 5000]
-            if nums:
-                return (nums[-1], nums[-1], False)
-
-            return None
-
+            
         def _extract_range_from_text(text: str):
             """
-            Like _extract_from_text but also tries range detection.
-            Returns (start, end, True) for ranges, or falls back to single.
+            Ultra-robust episode extraction combining both range detection
+            and smart fallback logic for single episodes.
             """
             c = _clean(text)
+            
+            # 1. Comma / Space sequence of numbers (e.g. 1 2 3 4 5, or 10,11,12)
+            # Must strictly be multiple isolated numbers
+            s = _re.search(r'(?<!\d)(\d{1,4}(?:(?:,\s*|\s+)\d{1,4}){2,})(?!\d)', c)
+            if s:
+                nums = [int(x) for x in _re.findall(r'\d+', s.group(1))]
+                if max(nums) < 5000: return (min(nums), max(nums), True)
 
-            # Explicit keyword first
-            m = _re.search(
-                r'(?i)\b(?:ep(?:isode)?|ch(?:apter)?|s\d{1,2}e)\s*[-_.]?\s*(\d{1,4})(?!\d)', c)
-            if m:
-                n = int(m.group(1))
+            # 2. explicit range with '-', 'to' etc
+            r = _re.search(r'(?<!\d)(\d{1,4}(?:(?:\s*[-\u2013\u2014]|(?i:\s+to\s+))\s*\d{1,4})+)(?!\d)', c)
+            if r:
+                nums = [int(x) for x in _re.findall(r'\d+', r.group(1))]
+                if max(nums) < 5000: return (min(nums), max(nums), True)
+                
+            # 3. Explicit keywords: "Ep 23", "Episode 23", "Part 23", "Ch 2", hindi
+            kw = _re.search(r'(?i)\b(?:ep|episode|e|ch|chapter|part|एपिसोड|भाग)\s*(\d{1,4})(?!\d)', c)
+            if kw:
+                n = int(kw.group(1))
                 if 0 < n < 5000: return (n, n, False)
-
-            # Check for multiple dash-separated or 'to' separated numbers (e.g. 123-130-150 or 151 to 200)
-            m_dash = _re.search(r'(?<!\d)(\d{1,4}(?:(?:\s*[-\u2013\u2014]|(?i:\s+to\s+))\s*\d{1,4})+)(?!\d)', c)
-            if m_dash:
-                m_nums = [int(x) for x in _re.findall(r'\d+', m_dash.group(1))]
-                s, e = min(m_nums), max(m_nums)
-                if 0 < s < e < 5000 and (e - s) < 500:
-                    return (s, e, True)
-
-            return _extract_from_text(text)
+                
+            # 4. Fallback: take the largest standalone number in the text
+            # Since words can have numbers embedded like 'Veera66angadh', separate words from numbers first
+            c2 = _re.sub(r'([a-zA-Z])(\d)', r'\1 \2', c)
+            c2 = _re.sub(r'(\d)([a-zA-Z])', r'\1 \2', c2)
+            
+            nums = [int(x) for x in _re.findall(r'(?<!\d)(\d{1,4})(?!\d)', c2) if 0 < int(x) < 5000]
+            if nums:
+                # take the LARGEST number, not the rightmost, since trailing numbers are often '2' for duplicates
+                return (max(nums), max(nums), False)
+                
+            return None
 
         def _get_file_names(msg):
             """Collect file_name strings (without extension) from all media attributes."""
