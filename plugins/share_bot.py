@@ -96,9 +96,9 @@ async def start_share_bot():
                 api_hash=Config.API_HASH,
                 in_memory=True,
             )
-            # Register handlers BEFORE starting so Pyrogram picks them up
-            register_share_handlers(sc)
             await sc.start()
+            # Register handlers AFTER start — required for in_memory sessions in Pyrogram 2.x
+            register_share_handlers(sc)
             share_clients[b['id']] = sc
             logger.info(f"Share Bot started: @{sc.me.username} ({b['name']})")
         except Exception as e:

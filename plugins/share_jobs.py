@@ -212,14 +212,14 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         selected_bot_id = sj['bot_id']
         poster = share_mod.share_clients.get(selected_bot_id)
         
-        if not poster or not getattr(poster, 'is_connected', False):
+        if not poster or not getattr(poster, 'is_initialized', None):
             try:
                 await share_mod.start_share_bot()  # reload bots if missing
                 poster = share_mod.share_clients.get(selected_bot_id)
             except Exception:
                 pass
 
-        if not poster or not getattr(poster, 'is_connected', False):
+        if not poster or not getattr(poster, 'is_initialized', None):
             return await safe_edit("❌ Share Bot failed to start or connect. Check settings.")
 
         bot_usr = poster.me.username

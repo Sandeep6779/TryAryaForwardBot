@@ -218,6 +218,23 @@ async def settings_query(bot, query):
      await query.answer(f"Buttons per post set to {nxt}")
      return await edit_settings(client, query, "sharebot")
 
+  elif type == "sbt_manage":
+      bots = await db.get_share_bots()
+      buttons = []
+      buttons.append([InlineKeyboardButton("━━━ 🤖 Dᴇʟɪᴠᴇʀʏ Bᴏᴛs ━━━", callback_data="settings#noop")])
+      for b in bots:
+          buttons.append([InlineKeyboardButton(f"🤖 {b['name']}", callback_data=f"settings#sb_view_{b['id']}")])
+      if len(bots) < 10:
+          buttons.append([InlineKeyboardButton('✚ Aᴅᴅ Sʜᴀʀᴇ Bᴏᴛ ✚', callback_data="settings#sb_add")])
+      buttons.append([InlineKeyboardButton('↩ Bᴀᴄᴋ', callback_data="settings#sharebot")])
+      
+      text = (
+          "<b><u>📋 Share Agent Accounts</u></b>\n\n"
+          f"<b>Allocated Bots:</b> {len(bots)}/10\n\n"
+          "<b>These bots handle exclusively the delivery payload of your Share Links.</b>"
+      )
+      await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
+
   elif type.startswith("sbt_"):
      key_map = {
          "sbt_welcome": ("welcome_msg", "Welcome Message"),
@@ -226,6 +243,8 @@ async def settings_query(bot, query):
          "sbt_success": ("success_msg", "Success Message"),
          "sbt_fsub": ("fsub_msg", "FSub Message"),
      }
+     if type not in key_map:
+         return await query.answer("Unknown action.")
      db_key, title = key_map[type]
      await query.message.delete()
      try:
