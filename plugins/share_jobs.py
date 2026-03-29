@@ -391,9 +391,11 @@ async def _build_share_links(bot, user_id, sj, info_msg):
                 n = int(m.group(1))
                 if 0 < n < 5000: return (n, n, False)
 
-            # Range pattern
-            for rm in _re.finditer(r'(?<!\d)(\d{1,4})\s*[-\u2013\u2014]\s*(\d{1,4})(?!\d)', c):
-                s, e = int(rm.group(1)), int(rm.group(2))
+            # Check for multiple dash-separated numbers (e.g. 123-130-150)
+            m_dash = _re.search(r'(?<!\d)(\d{1,4}(?:\s*[-\u2013\u2014]\s*\d{1,4})+)(?!\d)', c)
+            if m_dash:
+                m_nums = [int(x) for x in _re.findall(r'\d+', m_dash.group(1))]
+                s, e = min(m_nums), max(m_nums)
                 if 0 < s < e < 5000 and (e - s) < 500:
                     return (s, e, True)
 
@@ -426,24 +428,23 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         def extract_ep_individual(msg):
             """
             Deep episode extraction — individual mode.
-            Priority: file_name > caption > audio_title (last resort).
-            Range patterns in filenames return the LAST number (treated as single ep).
+            Now correctly uses range parsing so range files span multiple episodes.
             """
             # Priority 1: file_name only (most reliable)
             for fname in _get_file_names(msg):
-                r = _extract_from_text(fname)
+                r = _extract_range_from_text(fname)
                 if r: return r
 
             # Priority 2: caption text
             cap = msg.caption or msg.text or ""
             if cap.strip():
-                r = _extract_from_text(cap)
+                r = _extract_range_from_text(cap)
                 if r: return r
 
             # Priority 3: audio title (last resort — often has track numbers)
             t = _get_audio_title(msg)
             if t:
-                r = _extract_from_text(t)
+                r = _extract_range_from_text(t)
                 if r: return r
 
             return (-1, -1, False)
@@ -666,6 +667,26 @@ async def _build_share_links(bot, user_id, sj, info_msg):
                 "ep_start": b_s,
                 "ep_end":   b_e,
             })
+
+        # Process unparseable/skipped files into a separate button
+        added_msg_ids = set()
+        for mids in ep_to_msgs.values():
+            added_msg_ids.update(mids)
+            
+        unparseable_msgs = [m.id for m in all_valid_msgs if m.id not in added_msg_ids]
+        if unparseable_msgs:
+            uuid_str = str(uuid.uuid4()).replace('-', '')[:16]
+            await db.save_share_link(
+                uuid_str, unparseable_msgs, source_chat_id,
+                protect=protect, access_hash=db_access_hash
+            )
+            url = f"https://t.me/{bot_usr}?start={uuid_str}"
+            raw_buttons.append({
+                "btn":      InlineKeyboardButton("📁 Extra/Skipped Files", url=url),
+                "ep_start": "Extra",
+                "ep_end":   "Files",
+            })
+
 
         # ── PHASE 3: Post to target channel ──────────────────────────────────
         post_count = 0

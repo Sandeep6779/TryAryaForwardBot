@@ -322,13 +322,39 @@ def _build_atempo_chain(speed):
         filters.append(f"atempo={rem:.4f}")
     return ",".join(filters) if filters else ""
 
-
-def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=None, speed=1.0, make_video=False, video_cover=None, outro_cover=None, total_duration=None):
+async def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=None, speed=1.0, make_video=False, video_cover=None, outro_cover=None, total_duration=None, progress_cb=None):
     """Merge file_list → output_path. Tries lossless copy first, falls back to re-encode.
     make_video: If True and cover is present, creates an MP4 video out of the merged audio and cover image.
     speed: 1.0 = normal, 2.5 = 2.5x faster.
     Returns (ok: bool, error: str).
     """
+    import asyncio, re
+    async def _run_cmd(cmd_list, timeout_sec):
+        proc = await asyncio.create_subprocess_exec(
+            *cmd_list, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
+        )
+        stderr_lines = []
+        async def _reader():
+            while True:
+                line = await proc.stderr.readline()
+                if not line: break
+                lstr = line.decode('utf-8', errors='replace')
+                stderr_lines.append(lstr)
+                if progress_cb:
+                    m = re.search(r'time=(\d+):(\d+):(\d+\.\d+)', lstr)
+                    if m:
+                        h, m_m, s = float(m.group(1)), float(m.group(2)), float(m.group(3))
+                        await progress_cb(h*3600 + m_m*60 + s)
+        try:
+            await asyncio.wait_for(asyncio.gather(proc.wait(), _reader()), timeout=timeout_sec)
+        except asyncio.TimeoutError:
+            try: proc.kill()
+            except: pass
+            return False, "FFmpeg timed out"
+        outerr = "".join(stderr_lines[-50:])
+        if proc.returncode == 0: return True, ""
+        return False, outerr
+
     lst = output_path + ".list.txt"
     vconcat_txt = output_path + ".vconcat.txt"
     try:
@@ -367,10 +393,9 @@ def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=No
             cmd.append(output_path)
             abs_out = os.path.abspath(output_path)
             cmd[-1] = abs_out
-            r = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
-            if r.returncode == 0 and os.path.exists(abs_out) and os.path.getsize(abs_out) > 1000:
+            ok, err = await _run_cmd(cmd, 7200)
+            if ok and os.path.exists(abs_out) and os.path.getsize(abs_out) > 1000:
                 return True, ""
-
         # Re-encode path
         cmd2 = ["ffmpeg","-y","-threads","1"]
         eff_cover = video_cover or cover  # use video_cover if available
@@ -387,9 +412,9 @@ def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=No
                 if atempo: fc += f";[a1]{atempo}[a2]"
                 map_lbl = "[a2]" if atempo else "[a1]"
                 audio_cmd += ["-filter_complex", fc, "-map", map_lbl, "-vn","-c:a","aac","-b:a","192k", tmp_audio]
-                r_audio = subprocess.run(audio_cmd, capture_output=True, text=True, timeout=7200)
-                if r_audio.returncode != 0 or not os.path.exists(tmp_audio):
-                    return False, "Audio merge failed: " + r_audio.stderr[-400:]
+                a_ok, a_err = await _run_cmd(audio_cmd, 7200)
+                if not a_ok or not os.path.exists(tmp_audio):
+                    return False, "Audio merge failed: " + a_err
 
                 real_dur = _get_duration(tmp_audio)
                 if real_dur <= 0:
@@ -469,14 +494,14 @@ def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=No
                         if v: cmd2 += ["-metadata", f"{k}={v}"]
                 abs_output = os.path.abspath(output_path)
                 cmd2.append(abs_output)
-                r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=14400)
+                v_ok, v_err = await _run_cmd(cmd2, 14400)
                 try:
                     if os.path.exists(tmp_audio): os.remove(tmp_audio)
                 except Exception: pass
-                if r2.returncode == 0 and os.path.exists(abs_output) and os.path.getsize(abs_output) > 100:
+                if v_ok and os.path.exists(abs_output) and os.path.getsize(abs_output) > 100:
                     return True, ""
                 else:
-                    return False, r2.stderr[-800:]
+                    return False, v_err
             else:
                 cmd2 += ["-loop", "1", "-framerate", "1", "-i", os.path.abspath(eff_cover)]
         else:
@@ -528,13 +553,13 @@ def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=No
         # CRITICAL: always use the absolute path for output
         abs_output = os.path.abspath(output_path)
         cmd2.append(abs_output)
-        r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=14400)
+        ok2, err2 = await _run_cmd(cmd2, 14400)
         # Verify output at its absolute path
-        if r2.returncode == 0 and os.path.exists(abs_output) and os.path.getsize(abs_output) > 100:
+        if ok2 and os.path.exists(abs_output) and os.path.getsize(abs_output) > 100:
             return True, ""
         else:
-            return False, r2.stderr[-800:]
-    except subprocess.TimeoutExpired:
+            return False, err2
+    except asyncio.TimeoutError:
         return False, "FFmpeg timed out"
     except Exception as e:
         return False, str(e)
@@ -858,10 +883,25 @@ async def _run_job(jid, uid, bot):
             except: pass
 
             chunk_files_sorted = sorted(chunk_files, key=lambda p: os.path.basename(p))
-            loop = asyncio.get_event_loop()
+            
+            chunk_dur = sum(_ffprobe_duration(f) for f in chunk_files_sorted)
+            last_edit = [time.time()]
+            async def chunk_prog(cur_secs):
+                now = time.time()
+                if now - last_edit[0] > 5:
+                    pct = min(100, int((cur_secs / max(chunk_dur, 0.1)) * 100))
+                    try:
+                        if status_msg: await status_msg.edit_text(
+                            f"<b>🔀 {chunk_label} — Merging {len(chunk_files)} files→ part {chunk_num}</b>\n"
+                            f"<code>{_bar(pct, 100)}</code>\n"
+                            f"⏳ Progress: {pct}%"
+                        )
+                    except: pass
+                    last_edit[0] = now
+
             # Chunk parts: always lossless (speed applied at final merge only)
-            ok, err = await loop.run_in_executor(
-                None, _ffmpeg_merge, chunk_files_sorted, part_path, None, mtype, None, 1.0, False)
+            ok, err = await _ffmpeg_merge(
+                chunk_files_sorted, part_path, None, mtype, None, 1.0, False, progress_cb=chunk_prog)
 
             if not ok:
                 await _db_up(jid, status="error", error=f"Chunk {chunk_num} merge failed: {err[:300]}")
@@ -907,10 +947,24 @@ async def _run_job(jid, uid, bot):
         except: pass
 
         part_files_sorted = sorted(part_files, key=lambda p: os.path.basename(p))
-        loop = asyncio.get_event_loop()
-        ok, err = await loop.run_in_executor(
-            None, _ffmpeg_merge, part_files_sorted, out_path, metadata, mtype,
-            cover, speed, make_video, effective_cover_for_video, outro_cover, cumulative_secs)
+        final_dur = cumulative_secs
+        last_edit2 = [time.time()]
+        async def final_prog(cur_secs):
+            now = time.time()
+            if now - last_edit2[0] > 5:
+                pct = min(100, int((cur_secs / max(final_dur, 0.1)) * 100))
+                try:
+                    await status_msg.edit_text(
+                        f"<b>🔀 Final combine: {len(part_files)} parts → {out_name}{out_ext}</b>\n"
+                        f"<code>{_bar(pct, 100)}</code>\n"
+                        f"⏳ Progress: {pct}%"
+                    )
+                except: pass
+                last_edit2[0] = now
+
+        ok, err = await _ffmpeg_merge(
+            part_files_sorted, out_path, metadata, mtype,
+            cover, speed, make_video, effective_cover_for_video, outro_cover, cumulative_secs, progress_cb=final_prog)
 
         if not ok:
             await _db_up(jid, status="error", error=err[:500])
