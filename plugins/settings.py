@@ -523,18 +523,24 @@ async def settings_query(bot, query):
               blocked = 0
               for u in uids:
                   try:
-                      await msg_obj.copy(chat_id=u)
+                      await sb_app.copy_message(
+                          chat_id=int(u),
+                          from_chat_id=msg_obj.chat.id,
+                          message_id=msg_obj.id
+                      )
                       sent += 1
                   except Exception as e:
                       failed += 1
-                      if "USER_IS_BLOCKED" in str(e) or "bot was blocked" in str(e).lower():
+                      if "USER_IS_BLOCKED" in str(e) or "bot was blocked" in str(e).lower() or "PEER_ID_INVALID" in str(e):
                           blocked += 1
                   await asyncio.sleep(0.05) # Rate limit protection
-                  if (sent + failed) % 15 == 0:
+                  
+                  # Update stats every 5 users
+                  if min(sent + failed, len(uids)) % 5 == 0 or (sent + failed) == len(uids):
                       try:
                           await status_msg.edit_text(
                               f"<b>📢 Broadcast In Progress...</b>\n\n"
-                              f"<b>Total:</b> <code>{len(uids)}</code>\n"
+                              f"<b>Total Target:</b> <code>{len(uids)}</code>\n"
                               f"<b>✅ Sent:</b> <code>{sent}</code>\n"
                               f"<b>❌ Failed:</b> <code>{failed}</code>\n"
                               f"<b>🚫 Blocked:</b> <code>{blocked}</code>"
@@ -568,7 +574,7 @@ async def settings_query(bot, query):
               pass
 
   # ── About section editor ──────────────────────────────────────────────────
-  elif type.startswith("sb_about_"):
+  elif type.startswith("sb_about_") and not any(type.startswith(f"sb_about_{p}_") for p in ['img', 'txt', 'owner', 'ver', 'reset']):
       b_id = type.split("sb_about_")[1]
       bots = await db.get_share_bots()
       bt = next((x for x in bots if str(x['id']) == str(b_id)), None)
@@ -682,35 +688,28 @@ async def settings_query(bot, query):
       return await edit_settings(client, query, f"sb_about_{b_id}")
 
   # ── Per-bot Force-Subscribe ───────────────────────────────────────────────
-  elif type.startswith("sb_fsub_"):
-      suffix = type[len("sb_fsub_"):]
-      # sub-actions: add, jr, del, main list
-      parts = suffix.split("_")
-      if not parts[0].startswith("-") and not parts[0].isdigit():
-          # It's the main FSub page for this bot: sb_fsub_{b_id}
-          b_id = suffix
-          fsub_chs = await db.get_bot_fsub_channels(b_id)
-          lines = []
-          btns  = []
-          for i, ch in enumerate(fsub_chs):
-              jr_lbl = " [JR]" if ch.get('join_request') else ""
-              lines.append(f"{i+1}. {ch.get('title','?')}{jr_lbl}")
-              btns.append([
-                  InlineKeyboardButton(f"🔄 JR #{i+1}",  callback_data=f"settings#sb_fsub_jr_{b_id}_{i}"),
-                  InlineKeyboardButton(f"❌ Del #{i+1}", callback_data=f"settings#sb_fsub_del_{b_id}_{i}"),
-              ])
-          ch_list = "\n".join(lines) if lines else "None configured."
-          if len(fsub_chs) < 6:
-              btns.append([InlineKeyboardButton("➕ Aᴅᴅ Cʜᴀɴɴᴇʟ", callback_data=f"settings#sb_fsub_add_{b_id}")])
-          btns.append([InlineKeyboardButton("↩ Bᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")])
-          await query.message.edit_text(
-              f"<b>📢 Force-Subscribe — Bot Specific</b>\n\n"
-              f"Users must join ALL listed channels to receive files from this bot.\n"
-              f"[JR] = join-request mode.\n\n{ch_list}",
-              reply_markup=InlineKeyboardMarkup(btns)
-          )
-      else:
-          await query.answer("Invalid FSub action.", show_alert=True)
+  elif type.startswith("sb_fsub_") and not any(type.startswith(f"sb_fsub_{p}_") for p in ['add', 'jr', 'del']):
+      b_id = type.split("sb_fsub_")[1]
+      fsub_chs = await db.get_bot_fsub_channels(b_id)
+      lines = []
+      btns  = []
+      for i, ch in enumerate(fsub_chs):
+          jr_lbl = " [JR]" if ch.get('join_request') else ""
+          lines.append(f"{i+1}. {ch.get('title','?')}{jr_lbl}")
+          btns.append([
+              InlineKeyboardButton(f"🔄 JR #{i+1}",  callback_data=f"settings#sb_fsub_jr_{b_id}_{i}"),
+              InlineKeyboardButton(f"❌ Del #{i+1}", callback_data=f"settings#sb_fsub_del_{b_id}_{i}"),
+          ])
+      ch_list = "\n".join(lines) if lines else "None configured."
+      if len(fsub_chs) < 6:
+          btns.append([InlineKeyboardButton("➕ Aᴅᴅ Cʜᴀɴɴᴇʟ", callback_data=f"settings#sb_fsub_add_{b_id}")])
+      btns.append([InlineKeyboardButton("↩ Bᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")])
+      await query.message.edit_text(
+          f"<b>📢 Force-Subscribe — Bot Specific</b>\n\n"
+          f"Users must join ALL listed channels to receive files from this bot.\n"
+          f"[JR] = join-request mode.\n\n{ch_list}",
+          reply_markup=InlineKeyboardMarkup(btns)
+      )
 
   elif type.startswith("sb_fsub_jr_"):
       rest = type[len("sb_fsub_jr_"):]
