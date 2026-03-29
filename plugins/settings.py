@@ -451,7 +451,7 @@ async def settings_query(bot, query):
                  "Make sure the Main Bot is an admin in that channel.",
                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩ Back", callback_data="settings#sharefsub")]])
              )
-     except asyncio.exceptions.TimeoutError:
+     except asyncio.TimeoutError:
          try: await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("↩ Back", callback_data="settings#sharefsub")]]))
          except Exception: pass
 

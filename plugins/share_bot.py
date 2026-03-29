@@ -51,27 +51,35 @@ async def delete_later(client, chat_id, msg_ids: list, notice_id: int, delay_sec
 
 
 async def check_all_subscriptions(client, user_id: int, fsub_channels: list) -> list:
-    """Returns list of channel dicts the user has NOT joined."""
+    """Returns list of channel dicts the user has NOT joined (or pending for JR channels)."""
     not_joined = []
     for ch in fsub_channels:
         chat_id = ch.get('chat_id')
         if not chat_id:
             continue
+        is_jr = ch.get('join_request', False)
         try:
-            # Resolve the peer first (in_memory bot has empty cache)
             try:
                 await client.get_chat(int(chat_id))
             except Exception:
-                pass  # peer may already be cached or will be resolved inside get_chat_member
+                pass
             member = await client.get_chat_member(int(chat_id), user_id)
             if member.status in (enums.ChatMemberStatus.LEFT, enums.ChatMemberStatus.BANNED):
                 not_joined.append(ch)
+            # MEMBER / ADMINISTRATOR / OWNER / RESTRICTED = they're in, allow
         except UserNotParticipant:
-            not_joined.append(ch)
+            if is_jr:
+                # Mark as needing join request (not yet a member, but JR mode)
+                ch_copy = dict(ch)
+                ch_copy['needs_request'] = True
+                not_joined.append(ch_copy)
+            else:
+                not_joined.append(ch)
         except Exception as e:
-            logger.warning(f"FSub check skipped for {chat_id} (bot may not be admin there): {e}")
-            # Do NOT block user if we can't check — only block on confirmed non-member
+            logger.warning(f"FSub check skipped for {chat_id}: {e}")
+            # Can't verify — don't block user
     return not_joined
+
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,32 +141,49 @@ async def _process_start(client, message):
     if fsub_channels:
         not_joined = await check_all_subscriptions(client, user_id, fsub_channels)
         if not_joined:
+            # For JR channels that user hasn't joined yet — send join request
             f_buttons = []
+            jr_channels = []  # channels where user needs to send a join request
             for ch in not_joined:
                 label = ch.get('title') or "📢 Join Channel"
-                if ch.get('join_request'):
-                    label = f"📨 {label}"
                 invite = ch.get('invite_link', '')
-                if invite:
-                    f_buttons.append(InlineKeyboardButton(label, url=invite))
+                is_jr = ch.get('join_request', False)
+                is_pending = ch.get('pending_request', False)
+                if is_jr and not is_pending and invite:
+                    # User needs to send join request
+                    f_buttons.append(InlineKeyboardButton(f"📨 {label}", url=invite))
+                    jr_channels.append(label)
+                elif not is_jr and invite:
+                    f_buttons.append(InlineKeyboardButton(f"📢 {label}", url=invite))
 
             rows = []
             for i in range(0, len(f_buttons), 2):
                 rows.append(f_buttons[i:i+2])
             rows.append([
                 InlineKeyboardButton(
-                    "✅ I've Joined — Try Again!",
+                    "Tʀʏ Aɢᴀɪɴ",
                     url=f"https://t.me/{client.me.username}?start={uuid_str}"
                 )
             ])
 
             fsub_msg = await db.get_share_text("fsub_msg", "")
-            txt = format_msg(fsub_msg, message.from_user) if fsub_msg else (
-                f"<b>🔒 Join Required!</b>\n\n"
-                f"Hey {message.from_user.first_name or 'User'},\n"
-                f"Please join all update channels to use me!\n\n"
-                "<i>After joining, click <b>Try Again</b> below.</i>"
-            )
+            if fsub_msg:
+                txt = format_msg(fsub_msg, message.from_user)
+            elif jr_channels:
+                txt = (
+                    f"<b>🔒 Join Required!</b>\n\n"
+                    f"Hey {message.from_user.first_name or 'User'},\n"
+                    f"Please send a <b>join request</b> to the following channel(s) to access files:\n"
+                    + "\n".join(f"• {n}" for n in jr_channels) +
+                    "\n\n<i>After sending the request, click <b>Try Again</b> — your request will be auto-approved.</i>"
+                )
+            else:
+                txt = (
+                    f"<b>🔒 Join Required!</b>\n\n"
+                    f"Hey {message.from_user.first_name or 'User'},\n"
+                    f"Please join all update channels to use me!\n\n"
+                    "<i>After joining, click <b>Try Again</b> below.</i>"
+                )
             await message.reply_text(txt, reply_markup=InlineKeyboardMarkup(rows))
             return
 

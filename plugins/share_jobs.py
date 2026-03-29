@@ -310,170 +310,252 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         if not all_valid_msgs:
             return await safe_edit("❌ No files found in that range.")
 
-        # ── PARSE & BUCKET EPISODES ──────────────────────────────────────────
         all_valid_msgs.sort(key=lambda x: x.id)  # chronological
 
-        import re as _re
 
-        def extract_ep_num(msg) -> int:
+        def extract_ep_info(msg):
             """
-            Returns the episode number from text+caption+filename.
-            Checks msg.audio, msg.voice, msg.document for file_name.
-            Returns -1 if nothing found.
+            Returns (ep_start, ep_end, is_range) where:
+            - ep_start: starting episode number
+            - ep_end:   ending episode number (same as ep_start for single files)
+            - is_range: True if this is a grouped/range file (e.g. '1-37')
+            Returns (-1, -1, False) if unparseable.
             """
             text = (msg.caption or "") + " " + (msg.text or "")
-
-            # Extract filename from ALL possible media types
             for attr in ("audio", "voice", "document", "video"):
                 media = getattr(msg, attr, None)
                 if media:
                     fname = getattr(media, "file_name", None)
-                    if fname:
-                        text += " " + str(fname)
-                    # also try title for audio tracks
+                    if fname: text += " " + str(fname)
                     title = getattr(media, "title", None)
-                    if title:
-                        text += " " + str(title)
+                    if title: text += " " + str(title)
 
-            # Priority 1 — named keyword + number: "Ep 23", "Episode 23", "Part 23" etc.
-            m = _re.search(r'\b(?:ep|episode|ch|chapter|part|audio)\s*[-_.:]?\s*(\d{1,4})\b', text, _re.IGNORECASE)
+            # Priority 1 — named keyword + number: "Ep 23", "Episode 23", "Part 23"
+            m = _re.search(r'\b(?:ep|episode|ch|chapter|part|audio)\s*[-_.]?\s*(\d{1,4})\b', text, _re.IGNORECASE)
             if m:
-                return int(m.group(1))
+                return int(m.group(1)), int(m.group(1)), False
 
-            # Priority 2 — range pattern: "31-40", "31_40" → take the START
-            m2 = _re.search(r'\b(\d{1,4})\s*[-_]+\s*(\d{1,4})\b', text)
+            # Priority 2 — explicit range: "31-40", "31 to 40" → grouped file
+            m2 = _re.search(r'\b(\d{1,4})\s*[-–—to]+\s*(\d{1,4})\b', text, _re.IGNORECASE)
             if m2:
                 s, e = int(m2.group(1)), int(m2.group(2))
-                if s < e and (e - s) < 200:
-                    return s
+                if 0 < s < e and (e - s) < 500:
+                    return s, e, True
 
-            # Priority 3 — last 1–4 digit standalone number ("204.mp3" → 204)
+            # Priority 3 — last standalone number (handles "204.mp3" → 204)
             nums = _re.findall(r'\b\d{1,4}\b', text)
             if nums:
-                return int(nums[-1])
+                return int(nums[-1]), int(nums[-1]), False
 
-            return -1
+            return -1, -1, False
 
-        # Build ep_num → [msg_ids]  (duplicates accumulate naturally)
-        ep_to_msgs: dict = {}  # ep_num → list of msg_ids
-
+        # First pass: collect all episode info in message order
+        parsed_msgs = []  # list of (msg, ep_start, ep_end, is_range)
+        unparseable_count = 0
         for m in all_valid_msgs:
-            ep = extract_ep_num(m)
-            if ep < 1:
-                continue  # completely un-parseable — skip
-            if ep not in ep_to_msgs:
-                ep_to_msgs[ep] = []
-            ep_to_msgs[ep].append(m.id)
+            ep_s, ep_e, is_r = extract_ep_info(m)
+            if ep_s < 1:
+                unparseable_count += 1
+                continue
+            parsed_msgs.append((m, ep_s, ep_e, is_r))
 
-        if not ep_to_msgs:
+        if not parsed_msgs:
             return await safe_edit("❌ Could not extract any episode numbers from the scanned messages.")
 
-        # Sort ep_to_msgs for reporting
-        all_ep_nums = sorted(ep_to_msgs.keys())
-        first_ep_num = all_ep_nums[0]
-        last_ep_num  = all_ep_nums[-1]
+        # ── DETECT MODE: Individual episodes vs Grouped range files ──────────
+        grouped_count = sum(1 for _, _, _, is_r in parsed_msgs if is_r)
+        total_count   = len(parsed_msgs)
+        # If >30% of files are range files, treat ALL files as their own bucket
+        GROUPED_MODE  = grouped_count > (total_count * 0.30)
 
-        # ── Build strict buckets ─────────────────────────────────────────────
-        # Bucket key = (b_start, b_end) where:
-        #   b_start = ((ep-1) // batch_size) * batch_size + 1   → e.g. ep 7, batch 10 → b_start=1
-        #   b_end   = b_start + batch_size - 1                  → b_end=10
-        # Each episode's msg_ids are added into its bucket only (no cross-bucket pollution).
-        # The last bucket's label is capped at the real last episode.
+        # ── Outlier tolerance (for individual mode): fix misnamed episodes ───
+        # If ep number differs wildly from its positional sequence neighbor,
+        # adjust it to the sequence position instead of skipping it.
+        # Example: 40 files in sequence, ep 359 appears as 259 → treat as 359
+        if not GROUPED_MODE:
+            # Build a sequential estimate based on neighbors
+            for i in range(len(parsed_msgs)):
+                msg, ep_s, ep_e, is_r = parsed_msgs[i]
+                if i == 0:
+                    continue
+                prev_ep = parsed_msgs[i-1][1]
+                expected = prev_ep + 1
+                # If current episode deviates by more than 50 from expected,
+                # but the last digit/two digits match (mistyped prefix),
+                # snap it to expected
+                if abs(ep_s - expected) > 50:
+                    # Check if last 2 digits match (e.g., 259 vs 359: last 2 = 59)
+                    if ep_s % 100 == expected % 100 or ep_s % 10 == expected % 10:
+                        parsed_msgs[i] = (msg, expected, expected, False)
 
-        buckets: dict = {}  # (b_start, b_end) → list of msg_ids (deduped)
+        # ── Build ep_to_msgs dict and track duplicates ─────────────────────
+        ep_to_msgs: dict = {}      # ep_start → [msg_ids]
+        duplicate_eps:  list = []  # list of ep numbers with >1 file
+        grouped_files:  list = []  # list of "(name, start-end)" for grouped files
 
-        for ep in all_ep_nums:
-            b_s = ((ep - 1) // batch_size) * batch_size + 1
-            b_e = b_s + batch_size - 1
-            key = (b_s, b_e)
-            if key not in buckets:
-                buckets[key] = []
-            for mid in ep_to_msgs[ep]:
-                if mid not in buckets[key]:
-                    buckets[key].append(mid)
+        for msg, ep_s, ep_e, is_r in parsed_msgs:
+            if is_r:
+                # Grouped file — map ep_s to this msg (1 file per range)
+                range_label = f"{ep_s}–{ep_e}"
+                grouped_files.append(range_label)
+                if ep_s not in ep_to_msgs:
+                    ep_to_msgs[ep_s] = []
+                if msg.id not in ep_to_msgs[ep_s]:
+                    ep_to_msgs[ep_s].append(msg.id)
+                # Also store ep_end for labeling
+                ep_to_msgs[ep_s]  # ensure it exists
+            else:
+                if ep_s not in ep_to_msgs:
+                    ep_to_msgs[ep_s] = []
+                if msg.id not in ep_to_msgs[ep_s]:
+                    ep_to_msgs[ep_s].append(msg.id)
+                elif msg.id not in ep_to_msgs[ep_s]:
+                    duplicate_eps.append(ep_s)
+
+        # Identify true duplicates (same ep_num, multiple messages)
+        duplicate_eps = sorted(set(ep for ep, ids in ep_to_msgs.items() if len(ids) > 1))
+
+        all_ep_nums    = sorted(ep_to_msgs.keys())
+        first_ep_num   = all_ep_nums[0]
+        last_ep_num    = all_ep_nums[-1]
+
+        # Missing episode detection (only meaningful in individual mode)
+        missing_eps: list = []
+        if not GROUPED_MODE:
+            expected_range = set(range(first_ep_num, last_ep_num + 1))
+            present_set    = set(all_ep_nums)
+            missing_eps    = sorted(expected_range - present_set)
+
+        # ── BUILD BUCKETS ─────────────────────────────────────────────────────
+        # GROUPED_MODE: each file = 1 button using its own range label
+        # INDIVIDUAL_MODE: bucket by batch_size
+        buckets = []  # list of (label_start, label_end, [msg_ids])
+
+        if GROUPED_MODE:
+            # Each grouped file becomes exactly one button
+            # For mixed (some individual, some grouped): still one button per entry
+            for msg, ep_s, ep_e, is_r in parsed_msgs:
+                mids = ep_to_msgs.get(ep_s, [])
+                # Deduplicate: only take the first msg for each ep_s
+                if mids and mids[0] == msg.id:
+                    buckets.append((ep_s, ep_e, [msg.id]))
+        else:
+            # Individual mode: fixed-size buckets
+            for ep in all_ep_nums:
+                b_s = ((ep - 1) // batch_size) * batch_size + 1
+                b_e = b_s + batch_size - 1
+                # Find or create bucket
+                existing = next((b for b in buckets if b[0] == b_s), None)
+                if existing:
+                    for mid in ep_to_msgs[ep]:
+                        if mid not in existing[2]:
+                            existing[2].append(mid)
+                else:
+                    mids = list(ep_to_msgs[ep])
+                    buckets.append([b_s, b_e, mids])
+
+            # Cap last bucket label at actual last ep
+            if buckets:
+                last_b = buckets[-1]
+                buckets[-1] = (last_b[0], min(last_b[1], last_ep_num), last_b[2])
 
         raw_buttons = []
-        sorted_buckets = sorted(buckets.items())
-
-        for idx, ((w_start, w_end), batch) in enumerate(sorted_buckets):
-            if not batch:
+        for b_s, b_e, mids in buckets:
+            if not mids:
                 continue
-
-            # Cap the last bucket's label so it shows actual last ep, not rounded-up
-            is_last = (idx == len(sorted_buckets) - 1)
-            display_end = min(w_end, last_ep_num) if is_last else w_end
-
             uuid_str = str(uuid.uuid4()).replace('-', '')[:16]
             await db.save_share_link(
-                uuid_str, batch, source_chat_id,
+                uuid_str, mids, source_chat_id,
                 protect=protect, access_hash=db_access_hash
             )
             url = f"https://t.me/{bot_usr}?start={uuid_str}"
-
-            btn_text = str(w_start) if batch_size == 1 else f"{w_start}\u2013{display_end}"
+            btn_text = str(b_s) if (b_s == b_e or batch_size == 1) else f"{b_s}–{b_e}"
             raw_buttons.append({
                 "btn":      InlineKeyboardButton(btn_text, url=url),
-                "ep_start": w_start,
-                "ep_end":   display_end,
+                "ep_start": b_s,
+                "ep_end":   b_e,
             })
 
-
-        # ── PHASE 3: Group buttons into posts and send to target channel ──────
+        # ── PHASE 3: Post to target channel ──────────────────────────────────
         post_count = 0
         for i in range(0, len(raw_buttons), buttons_per_post):
             chunk = raw_buttons[i : i + buttons_per_post]
-
             first_ep = chunk[0]["ep_start"]
             last_ep  = chunk[-1]["ep_end"]
-
             txt = f"<b>📂 {story.upper()} | Episodes {first_ep}–{last_ep}</b>"
-
             keyboard = []
             for j in range(0, len(chunk), 2):
                 row = [c["btn"] for c in chunk[j:j + 2]]
                 keyboard.append(row)
-
             keyboard.append([
                 InlineKeyboardButton("Tutorial 🎥", url="https://t.me/StoriesLinkopningguide"),
                 InlineKeyboardButton("Support ❓", url="https://t.me/+EAc-6v1bmZ1iMDBl")
             ])
-
             for attempt in range(6):
                 try:
                     await poster.send_message(
-                        chat_id=sj['target'],
-                        text=txt,
+                        chat_id=sj['target'], text=txt,
                         reply_markup=InlineKeyboardMarkup(keyboard)
                     )
                     break
                 except Exception as e:
                     err_str = str(e)
-                    import re as _re
+                    import re as _re2
                     if "FLOOD_WAIT" in err_str or "420" in err_str:
-                        mw = _re.search(r'wait of (\d+)', err_str)
+                        mw = _re2.search(r'wait of (\d+)', err_str)
                         wait_secs = (int(mw.group(1)) + 2) if mw else 35
-                        await safe_edit(f"<i>⏳ Rate limit while posting... waiting {wait_secs}s</i>")
+                        await safe_edit(f"<i>⏳ Rate limit... waiting {wait_secs}s</i>")
                         await asyncio.sleep(wait_secs)
                         continue
                     else:
                         return await safe_edit(
                             f"<b>❌ Failed to post to target channel:</b> <code>{e}</code>\n\n"
-                            f"<i>Make sure the selected account is an admin in the target/public channel.</i>"
+                            f"<i>Make sure the selected account is an admin in the target channel.</i>"
                         )
             else:
                 return await safe_edit("❌ Posting aborted after 6 retries due to FloodWait.")
-
             post_count += 1
             await asyncio.sleep(1)
 
-        await safe_edit(
-            f"<b>✅ Share Links Generated!</b>\n\n"
-            f"📊 <b>Episodes found:</b> {len(ep_to_msgs)}\n"
-            f"🎯 <b>Episode range:</b> {first_ep_num}–{last_ep_num}\n"
-            f"🔗 <b>Link buttons created:</b> {len(raw_buttons)}\n"
-            f"📝 <b>Posts sent to channel:</b> {post_count}\n\n"
-            f"<i>Users click any button to receive their episodes from @{bot_usr}.</i>"
-        )
+        # ── FINAL REPORT ─────────────────────────────────────────────────────
+        mode_str = "🗂 Grouped files (1 button/file)" if GROUPED_MODE else f"📑 Individual (batch size: {batch_size})"
+
+        report_lines = [
+            f"<b>✅ Share Links Generated!</b>",
+            f"",
+            f"📊 <b>Files processed:</b> {total_count}",
+            f"🎯 <b>Episode range:</b> {first_ep_num}–{last_ep_num}",
+            f"🔗 <b>Link buttons created:</b> {len(raw_buttons)}",
+            f"📝 <b>Posts sent to channel:</b> {post_count}",
+            f"⚙️ <b>Mode:</b> {mode_str}",
+        ]
+
+        if grouped_files:
+            gf_preview = ", ".join(grouped_files[:8])
+            if len(grouped_files) > 8:
+                gf_preview += f" (+{len(grouped_files)-8} more)"
+            report_lines.append(f"🗂 <b>Grouped files ({len(grouped_files)}):</b> {gf_preview}")
+
+        if duplicate_eps:
+            dup_preview = ", ".join(str(e) for e in duplicate_eps[:10])
+            if len(duplicate_eps) > 10:
+                dup_preview += f" (+{len(duplicate_eps)-10} more)"
+            report_lines.append(f"⚠️ <b>Duplicates skipped ({len(duplicate_eps)}):</b> {dup_preview}")
+
+        if missing_eps and not GROUPED_MODE:
+            miss_preview = ", ".join(str(e) for e in missing_eps[:15])
+            if len(missing_eps) > 15:
+                miss_preview += f" (+{len(missing_eps)-15} more)"
+            report_lines.append(f"❓ <b>Missing episodes ({len(missing_eps)}):</b> {miss_preview}")
+
+        if unparseable_count:
+            report_lines.append(f"🚫 <b>Unparseable messages skipped:</b> {unparseable_count}")
+
+        report_lines.append(f"")
+        report_lines.append(f"<i>Users click any button to receive their episodes from @{bot_usr}.</i>")
+
+        await safe_edit("\n".join(report_lines))
+
 
     except Exception as e:
         import traceback
