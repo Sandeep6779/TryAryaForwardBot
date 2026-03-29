@@ -165,6 +165,52 @@ class Database:
     async def remove_share_bot_config(self, bot_id: str):
         await self.share_config.delete_one({'_id': f'bot_{bot_id}'})
 
+    # ── Channel Index (full file list per database channel) ───────
+    async def save_channel_index(self, chat_id: int, entries: list, meta: dict = None):
+        """Save (or replace) the full scan index for a channel."""
+        import time
+        doc = {
+            '_id': f'ch_index_{chat_id}',
+            'chat_id': chat_id,
+            'entries': entries,
+            'count': len(entries),
+            'scanned_at': time.time(),
+            'meta': meta or {},
+        }
+        await self.share_config.update_one(
+            {'_id': f'ch_index_{chat_id}'}, {'$set': doc}, upsert=True
+        )
+
+    async def get_channel_index(self, chat_id: int):
+        """Return the stored index doc for this channel, or None."""
+        return await self.share_config.find_one({'_id': f'ch_index_{chat_id}'})
+
+    async def delete_channel_index(self, chat_id: int):
+        """Remove the index for a channel."""
+        await self.share_config.delete_one({'_id': f'ch_index_{chat_id}'})
+
+    async def update_channel_index_entry(self, chat_id: int, entry: dict):
+        """Append or update a single entry (indexed by msg_id) in the channel index."""
+        import time
+        await self.share_config.update_one(
+            {'_id': f'ch_index_{chat_id}'},
+            {
+                '$pull': {'entries': {'msg_id': entry['msg_id']}},
+            },
+            upsert=True
+        )
+        await self.share_config.update_one(
+            {'_id': f'ch_index_{chat_id}'},
+            {
+                '$push': {'entries': entry},
+                '$set': {'scanned_at': time.time()},
+                '$inc': {'count': 1},
+            },
+            upsert=True
+        )
+
+
+
     # Per-bot Users Tracker
     async def add_share_bot_user(self, bot_id: str, user_id: int):
         if not bot_id: return

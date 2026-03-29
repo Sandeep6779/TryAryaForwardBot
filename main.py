@@ -126,12 +126,23 @@ async def main():
     except Exception as e:
         logging.error(f"Failed to init share bot: {e}")
 
+    # Register DB channel auto-index listener on main bot
+    try:
+        from plugins.db_scanner import _try_auto_index
+        from pyrogram import filters as _f
+        @bot.on_message(_f.channel & (_f.audio | _f.document | _f.video | _f.voice))
+        async def _auto_index_handler(client, message):
+            asyncio.create_task(_try_auto_index(client, message))
+        logging.info("DB channel auto-index listener registered")
+    except Exception as e:
+        logging.warning(f"Could not register auto-index listener: {e}")
+
     # Start web server
     await web_server()
 
     # Start self-ping task
     asyncio.create_task(ping_server())
-    
+
     # Start stats tracking task
     asyncio.create_task(stats_tracker())
 

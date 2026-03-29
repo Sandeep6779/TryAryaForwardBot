@@ -41,6 +41,7 @@ async def _create_share_flow(bot, user_id):
             kb.append([f"🤖 {b['name']} (@{b['username']})"])
             
         kb.append(["❌ Cancel"])
+        kb.append(["📊 Scan Database Channel"])
         
         msg = await _ask(bot, user_id, 
             "<b>❪ SHARE LINKS: SELECT ACCOUNT ❫</b>\n\nChoose the Share Bot you want to use for link generation and delivery:",
@@ -48,13 +49,20 @@ async def _create_share_flow(bot, user_id):
         )
         if not msg.text or msg.text == "/cancel" or "Cancel" in msg.text:
             return await bot.send_message(user_id, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
-            
-        # Match selection
+
+        # ── Scan option ──────────────────────────────────────────────────
+        if "Scan Database" in msg.text:
+            await bot.send_message(user_id, "<b>📊 Opening Database Scanner...</b>", reply_markup=ReplyKeyboardRemove())
+            from plugins.db_scanner import _scan_flow
+            return await _scan_flow(bot, user_id)
+
+        # Match bot selection
         import re
         sel = msg.text
         match = re.search(r"@([a-zA-Z0-9_]+)", sel)
         if not match:
             return await bot.send_message(user_id, "<b>❌ Invalid selection.</b>", reply_markup=ReplyKeyboardRemove())
+
             
         username = match.group(1)
         selected_bot = next((b for b in share_bots if b['username'] == username), None)
@@ -193,6 +201,15 @@ async def sl_callback(bot, query):
     if cmd == "start":
         await query.message.delete()
         asyncio.create_task(_create_share_flow(bot, user_id))
+
+    elif cmd == "scan":
+        await query.answer()
+        try:
+            await query.message.delete()
+        except Exception:
+            pass
+        from plugins.db_scanner import _scan_flow
+        asyncio.create_task(_scan_flow(bot, user_id))
 
 async def _build_share_links(bot, user_id, sj, info_msg):
     sts = await info_msg.reply_text("<i>⏳ Initializing share worker...</i>", reply_markup=ReplyKeyboardRemove())
