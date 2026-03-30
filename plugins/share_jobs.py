@@ -553,7 +553,7 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         if not parsed_msgs:
             return await safe_edit("‣  Could not extract any episode numbers from the scanned messages.")
 
-        total_count = len(parsed_msgs)  # used in final report
+        # total_count is computed AFTER gap-fill (see below) to include gap-filled messages
 
 
         #  Build ep_to_msgs dict and track duplicates 
@@ -656,6 +656,10 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             missing_eps = sorted(missing_set)
             # Rebuild all_ep_nums after gap fill
             all_ep_nums = sorted(ep_to_msgs.keys())
+
+        # ── Total count: all messages that ended up in an episode slot ──────
+        # This is parsed_msgs + gap-filled ones (not the raw unparseable count)
+        total_count = len(parsed_msgs) + len(gap_filled_eps)
 
         #  BUILD BUCKETS 
         # GROUPED_MODE: each file = 1 button using its own range label
@@ -807,12 +811,13 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         report_lines = [
             f"<b>»  Share Links Generated!</b>",
             f"",
-            f"»  <b>Files processed:</b> {total_count}",
+            f"»  <b>Files in buttons:</b> {total_count} / {len(all_valid_msgs)} scanned",
             f"🎯 <b>Episode range:</b> {first_ep_num}–{last_ep_num}",
             f"»  <b>Link buttons created:</b> {len(raw_buttons)}",
             f"»  <b>Posts sent to channel:</b> {post_count}",
             f"»  <b>Mode:</b> {mode_str}",
         ]
+
 
         if grouped_files:
             gf_preview = ", ".join(grouped_files[:8])
