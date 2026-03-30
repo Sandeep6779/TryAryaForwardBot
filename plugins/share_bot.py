@@ -380,7 +380,8 @@ async def _send_welcome(client, message, bot_id: str = None):
     txt = _get_welcome_text(user, bot_name, custom_wel)
 
     bot_about = await db.get_share_bot_about(bot_id) if bot_id else {}
-    about_img = bot_about.get('image_id') if bot_about else None
+    # welcome_image_id is set by admin via "🖼 Welcome Image" in per-bot settings
+    welcome_img = bot_about.get('welcome_image_id') if bot_about else None
 
     buttons = [
         [
@@ -392,8 +393,8 @@ async def _send_welcome(client, message, bot_id: str = None):
     markup = InlineKeyboardMarkup(buttons)
 
     try:
-        if about_img:
-            await client.send_photo(user.id, photo=about_img, caption=txt, reply_markup=markup)
+        if welcome_img:
+            await client.send_photo(user.id, photo=welcome_img, caption=txt, reply_markup=markup)
         else:
             await message.reply_text(txt, reply_markup=markup)
     except Exception:
@@ -432,18 +433,21 @@ async def _send_about(client, query_or_msg, bot_id: str = None, edit: bool = Tru
     user = getattr(query_or_msg, 'from_user', getattr(msg, 'from_user', None))
 
     if about_text:
-        txt = _get_base_header(user) + _sc(about_text)
+        # Custom text: do NOT apply _sc — user may have hand-crafted formatting/links
+        txt = _get_base_header(user) + about_text
     else:
-        about_body = (
-            f"About Me\n\n"
-            f"My Name: {bot_name}\n"
-            f"Operated By: Arya Bot\n"
-            f"My Owner: <a href=\"{owner_link}\">{owner_name}</a>\n"
-            f"Updates: <a href=\"{update_link}\">{update_chan}</a>\n"
-            f"Support: <a href=\"{support_link}\">{support_chan}</a>\n"
-            f"Version: {version}"
+        # Build the body with clickable HTML links — do NOT pass through _sc()
+        # _sc() converts every ASCII char to Unicode small-caps, which destroys href URLs
+        txt = (
+            f"{_get_base_header(user)}"
+            f"<b>»  ᴀʙᴏᴜᴛ ᴍᴇ</b>\n\n"
+            f"<b>‣  ɴᴀᴍᴇ:</b>  {bot_name}\n"
+            f"<b>‣  ᴏᴘᴇʀᴀᴛᴇᴅ ʙʏ:</b>  Arya Bot\n"
+            f"<b>‣  ᴏᴡɴᴇʀ:</b>  <a href=\"{owner_link}\">{owner_name}</a>\n"
+            f"<b>‣  ᴜᴘᴅᴀᴛᴇꜱ:</b>  <a href=\"{update_link}\">{update_chan}</a>\n"
+            f"<b>‣  ꜱᴜᴘᴘᴏʀᴛ:</b>  <a href=\"{support_link}\">{support_chan}</a>\n"
+            f"<b>‣  ᴠᴇʀꜱɪᴏɴ:</b>  {version}"
         )
-        txt = _get_base_header(user) + _sc(about_body)
 
     buttons = [[InlineKeyboardButton("«  " + _sc("Back"), callback_data="sbd#back")]]
     markup  = InlineKeyboardMarkup(buttons)
@@ -453,7 +457,8 @@ async def _send_about(client, query_or_msg, bot_id: str = None, edit: bool = Tru
         if is_photo_msg:
             await msg.edit_caption(caption=txt, reply_markup=markup)
         else:
-            await msg.edit_text(txt, reply_markup=markup, disable_web_page_preview=True)
+            await msg.edit_text(txt, reply_markup=markup,
+                                disable_web_page_preview=True)
     except Exception as e:
         logger.warning(f"_send_about edit failed: {e}")
 
