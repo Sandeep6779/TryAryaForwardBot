@@ -272,13 +272,15 @@ async def _safe_resolve_peer(client, chat_id):
     try:
         await client.get_chat(chat_id)
     except Exception as e:
-        if "PEER_ID_INVALID" in str(e).upper() or "CHANNEL_INVALID" in str(e).upper():
+        err_str = str(e).upper()
+        if "PEER_ID_INVALID" in err_str or "CHANNEL_INVALID" in err_str or "PEER_ID_NOT_HANDLED" in err_str:
             try:
                 me = await client.get_me()
                 if not getattr(me, 'is_bot', False):
-                    async for _ in client.get_dialogs(limit=200): pass
+                    async for _ in client.get_dialogs(): pass
                 await client.get_chat(chat_id)
-            except: pass
+            except Exception as e2:
+                logger.warning(f"Failed to resolve {chat_id}: {e2}")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -591,12 +593,6 @@ async def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", co
 # ══════════════════════════════════════════════════════════════════════════════
 # Pre-download size scanner
 # ══════════════════════════════════════════════════════════════════════════════
-async def _safe_resolve_peer(client, peer_id):
-    try:
-        await client.get_input_entity(peer_id)
-    except:
-        pass
-
 async def _scan_total_size(client, from_chat, start_id, end_id):
     """Scan all messages in range and return (total_size_bytes, media_count) using
     Telegram metadata only — NO file downloads."""
