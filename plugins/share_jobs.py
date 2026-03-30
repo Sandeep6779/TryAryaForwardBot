@@ -382,21 +382,23 @@ async def _build_share_links(bot, user_id, sj, info_msg):
 
 
         _NOISE_RE = [
-            # Video resolutions — MUST have p/i suffix (so '480' alone is NOT stripped)
+            # Resolutions MUST have p/i suffix
             _re.compile(r'(?i)\b(?:360|480|720|1080|2160|4k)[pi]\b'),
-            # Codec / container labels
+            # Codec/format labels
             _re.compile(r'(?i)\b(?:x264|x265|h\.?264|h\.?265|hevc|avc|aac|mp[34]|m4a|m4v|m4b|mkv|avi|mov|wmv|flv|flac|opus|ogg|wav|webm|3gp|mts|m2ts)\b'),
-            # Calendar years 1900-2099 — NOT bare episode numbers
+            # Calendar years
             _re.compile(r'(?<!\d)(?:19[0-9]{2}|20[0-9]{2})(?!\d)'),
-            # File sizes like '150mb', '1.2GB'
+            # File sizes
             _re.compile(r'(?i)\b\d+(?:\.\d+)?\s*(?:mb|gb|kb)\b'),
-            # Season-episode codes like S01E05
+            # Track/season-episode labels like S01E05
             _re.compile(r'(?i)\b(?:s[0-9]{1,2}e[0-9]{1,2})(?=\s|$)'),
-            # True duplicate-copy suffixes like "Episode 5 (1)" — only END, after word char, max 2 digits
+            # Trailing duplicate markers ONLY when preceded by a word character:
+            # " (1)" at END of string means duplicate copy — safe to strip.
+            # But "(12)" or "(56)" alone in the name should NOT be stripped.
             _re.compile(r'(?<=\w)\s*\(\s*\d{1,2}\s*\)\s*$'),
             _re.compile(r'(?<=\w)\s*\[\s*\d{1,2}\s*\]\s*$'),
-            # Only the absolute safest noise words (cannot be part of Indian story names)
-            _re.compile(r'(?i)\b(?:copy|final)\b'),
+            # Common text noise
+            _re.compile(r'(?i)\b(?:copy|final|v\d+|new|latest|audio|track)\b'),
         ]
 
         def _clean(text: str) -> str:
@@ -553,7 +555,7 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         if not parsed_msgs:
             return await safe_edit("‣  Could not extract any episode numbers from the scanned messages.")
 
-        # total_count is computed AFTER gap-fill (see below) to include gap-filled messages
+        total_count = len(parsed_msgs)  # used in final report
 
 
         #  Build ep_to_msgs dict and track duplicates 
@@ -657,10 +659,6 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             # Rebuild all_ep_nums after gap fill
             all_ep_nums = sorted(ep_to_msgs.keys())
 
-        # ── Total count: all messages that ended up in an episode slot ──────
-        # This is parsed_msgs + gap-filled ones (not the raw unparseable count)
-        total_count = len(parsed_msgs) + len(gap_filled_eps)
-
         #  BUILD BUCKETS 
         # GROUPED_MODE: each file = 1 button using its own range label
         # INDIVIDUAL_MODE: bucket by batch_size
@@ -736,18 +734,16 @@ async def _build_share_links(bot, user_id, sj, info_msg):
                 "ep_end":   b_e,
             })
 
-        # ── Extra/Skipped Files button ────────────────────────────────────
-        # Only files that are STILL not in any episode slot AFTER gap-fill.
+        # Process unparseable/skipped files into a separate button
         added_msg_ids = set()
         for mids in ep_to_msgs.values():
             added_msg_ids.update(mids)
-        truly_skipped_msgs = [m for m in all_valid_msgs if m.id not in added_msg_ids]
-        final_skipped_count = len(truly_skipped_msgs)
-
-        if truly_skipped_msgs:
+            
+        unparseable_msgs = [m.id for m in all_valid_msgs if m.id not in added_msg_ids]
+        if unparseable_msgs:
             uuid_str = str(uuid.uuid4()).replace('-', '')[:16]
             await db.save_share_link(
-                uuid_str, [m.id for m in truly_skipped_msgs], source_chat_id,
+                uuid_str, unparseable_msgs, source_chat_id,
                 protect=protect, access_hash=db_access_hash
             )
             url = f"https://t.me/{bot_usr}?start={uuid_str}"
@@ -805,13 +801,12 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         report_lines = [
             f"<b>»  Share Links Generated!</b>",
             f"",
-            f"»  <b>Files in buttons:</b> {total_count} / {len(all_valid_msgs)} scanned",
+            f"»  <b>Files processed:</b> {total_count}",
             f"🎯 <b>Episode range:</b> {first_ep_num}–{last_ep_num}",
             f"»  <b>Link buttons created:</b> {len(raw_buttons)}",
             f"»  <b>Posts sent to channel:</b> {post_count}",
             f"»  <b>Mode:</b> {mode_str}",
         ]
-
 
         if grouped_files:
             gf_preview = ", ".join(grouped_files[:8])
@@ -831,11 +826,8 @@ async def _build_share_links(bot, user_id, sj, info_msg):
                 miss_preview += f" (+{len(missing_eps)-15} more)"
             report_lines.append(f"»  <b>Missing episodes ({len(missing_eps)}):</b> {miss_preview}")
 
-        if final_skipped_count:
-            report_lines.append(f"&#128683; <b>Truly skipped — in Extra/Skipped button: {final_skipped_count}</b>")
-        elif unparseable_count:
-            gap_filled = unparseable_count - final_skipped_count
-            report_lines.append(f"&#9989; <b>Gap-fill resolved {gap_filled} of {unparseable_count} initially unparseable (0 skipped)</b>")
+        if unparseable_count:
+            report_lines.append(f"🚫 <b>Unparseable messages skipped:</b> {unparseable_count}")
 
         report_lines.append(f"")
         report_lines.append(f"<i>Users click any button to receive their episodes from @{bot_usr}.</i>")
@@ -874,17 +866,11 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             plain_report.append("  " + ", ".join(str(e) for e in missing_eps))
         if unparseable_count:
             plain_report.append("-" * 50)
-            plain_report.append(f"UNPARSEABLE FILES: {unparseable_count}")
-            plain_report.append(f"  Gap-fill resolved : {unparseable_count - final_skipped_count}")
-            plain_report.append(f"  Truly skipped     : {final_skipped_count}")
-            if final_skipped_count:
-                plain_report.append("  (Available via Extra/Skipped Files button)")
+            plain_report.append(f"UNPARSEABLE MESSAGES SKIPPED: {unparseable_count}")
         plain_report += [
             "=" * 50,
-            "Note: Duplicates = multiple files with same episode number.",
-            "ALL were included — nothing was skipped.",
-            "-" * 50,
-            "This report is auto-generated. | Powered by Arya Bot",
+            "Note: Duplicates mean multiple files had the same episode",
+            "number. ALL were included — nothing was skipped.",
             "=" * 50,
         ]
         report_text = "\n".join(plain_report)
@@ -894,74 +880,72 @@ async def _build_share_links(bot, user_id, sj, info_msg):
         try:
             usr_obj = await bot.get_users(user_id)
             u_name = usr_obj.first_name if usr_obj else "User"
-            poster_me = await poster.get_me()
-            bot_link = f"<a href='https://t.me/{bot_usr}'>{poster_me.first_name}</a>"
+            bot_link = f"<a href='https://t.me/{bot_usr}'>{poster.me.first_name}</a>"
             story_sz = _sc(story)
 
             if sj.get('is_completed'):
-                # DM: personalised; Channel: no user tag
-                dm_header = f"›› {_sc('Hey')} <a href='tg://user?id={user_id}'>{u_name}</a>\n\n"
-                ch_header = f"›› {_sc('Hey Strangers')}\n\n"
+                # ── Completed story: full bilingual report caption ──────────
+                header = f"›› {_sc('Hey')} <a href='tg://user?id={user_id}'>{u_name}</a>\n\n"
 
                 en_body = (
                     _sc("This ") + story_sz + _sc(" is completed by ") + bot_link +
-                    _sc(". I have tried to make everything correct and have also provided you"
-                        " with a final report containing all details. Some episodes may"
-                        " naturally be missing, so please don't panic — nothing can be done"
-                        " about that. But if 10+ episodes are missing, you can complain in"
-                        " support. Some episodes may also be artificially missing, like due"
-                        " to parser issues. I don't think I can do anything about that."
-                        " Non-logical or unparsed files will be available in your"
-                        " '»  Extra/Skipped files'. Some duplicates are also shown — either"
-                        " they are real duplicates, or the uploader (I have not scraped this"
-                        " from Pocket FM or any other platform; these were forcefully forwarded"
-                        " via Arya bot from some private/public channel/group/bot, so I am not"
-                        " responsible) uploaded multiple files with the same name. So I believe"
-                        " you are intelligent enough to understand this.")
+                    _sc(". I have tried to make everything correct and have also provided"
+                        " you with a final report containing all details. Some episodes may"
+                        " naturally be missing — nothing can be done about that. But if 10+"
+                        " episodes are missing, you can complain in support. Non-logical or"
+                        " unparsed files will be available in '»  Extra/Skipped files'."
+                        " Some duplicates are shown — either real duplicates, or the uploader"
+                        " uploaded multiple files with the same name. I am not responsible"
+                        " as these files were forwarded via Arya bot and not scraped.")
                 )
 
                 hi_body = (
-                    f"यह {story_sz} {bot_link} द्वारा पूरी कर दी गई है। मैंने सब कुछ सही करने की कोशिश की है"
-                    " और आपको सभी विवरणों के साथ एक अंतिम रिपोर्ट भी प्रदान की है। कुछ एपिसोड स्वाभाविक रूप"
-                    " से गायब हो सकते हैं, इसलिए कृपया घबराएं नहीं — उसका कुछ नहीं किया जा सकता। लेकिन अगर"
-                    " 10+ एपिसोड गायब हैं, तो आप सपोर्ट में शिकायत कर सकते हैं। कुछ एपिसोड कृत्रिम रूप से भी गायब हो"
-                    " सकते हैं, जैसे पार्सर समस्याओं के कारण। मुझे नहीं लगता कि मैं इसके बारे में कुछ भी कर सकता हूँ।"
-                    " गैर-तार्किक या अनपार्स की गई फ़ाइलें '»  Extra/Skipped files' में उपलब्ध होंगी। कुछ डुप्लिकेट दिखाए"
-                    " गए हैं — या तो वे वास्तविक डुप्लिकेट हैं, या अपलोडर ने एक ही नाम से कई फ़ाइलें अपलोड की हैं।"
-                    " (मैंने इसे पॉकेट एफएम या किसी अन्य प्लैटफ़ॉर्म से स्क्रैप नहीं किया है, इन्हें आर्या बॉट के"
-                    " माध्यम से बलपूर्वक अग्रेषित किया गया था।) इसलिए मुझे विश्वास है कि आप इसे समझने के लिए पर्याप्त बुद्धिमान हैं।"
+                    f"यह {story_sz} {bot_link} द्वारा पूरी कर दी गई है। मैंने सब कुछ सही"
+                    " करने की कोशिश की है। कुछ एपिसोड स्वाभाविक रूप से गायब हो सकते हैं —"
+                    " घबराएं नहीं। गैर-तार्किक फ़ाइलें '»  Extra/Skipped files' में मिलेंगी।"
                 )
 
-                dm_cap = (f"<blockquote expandable>{dm_header}{en_body}</blockquote>"
-                          f"\n\n<blockquote expandable>{hi_body}</blockquote>")
-                ch_cap = (f"<blockquote expandable>{ch_header}{en_body}</blockquote>"
-                          f"\n\n<blockquote expandable>{hi_body}</blockquote>")
+                final_cap = (
+                    f"<blockquote expandable>{header}{en_body}</blockquote>"
+                    f"\n\n<blockquote expandable>{hi_body}</blockquote>"
+                )
 
-                await bot.send_document(user_id, report_bytes, caption=dm_cap,
-                                        parse_mode="html", file_name=report_bytes.name)
+                # Send to admin DM
+                await bot.send_document(
+                    user_id, report_bytes,
+                    caption=final_cap,
+                    file_name=report_bytes.name
+                )
+                # Send to target channel too
                 report_bytes.seek(0)
-                await poster.send_document(sj['target'], report_bytes, caption=ch_cap,
-                                           parse_mode="html", file_name=report_bytes.name)
+                await poster.send_document(
+                    sj['target'], report_bytes,
+                    caption=final_cap,
+                    file_name=report_bytes.name
+                )
 
             else:
-                dm_ongoing = (
+                # ── Ongoing story: short friendly caption ───────────────────
+                ongoing_cap = (
                     f"›› {_sc('Hey')} <a href='tg://user?id={user_id}'>{u_name}</a>\n\n"
-                    + _sc("I have posted all the files currently available with me."
-                           " If any new episode comes, I will add it here. Enjoy and stay tuned!")
+                    + _sc("I have posted all the files currently available. "
+                           "As new episodes arrive, I will post them. Enjoy!")
                 )
-                ch_ongoing = (
-                    f"›› {_sc('Hey Strangers')}\n\n"
-                    + _sc("All currently available files have been posted here."
-                           " New episodes will be added as they arrive. Enjoy and stay tuned!")
-                )
-                dm_cap = f"<blockquote expandable>{dm_ongoing}</blockquote>"
-                ch_cap = f"<blockquote expandable>{ch_ongoing}</blockquote>"
+                final_cap = f"<blockquote expandable>{ongoing_cap}</blockquote>"
 
-                await bot.send_document(user_id, report_bytes, caption=dm_cap,
-                                        parse_mode="html", file_name=report_bytes.name)
+                # Send to admin DM
+                await bot.send_document(
+                    user_id, report_bytes,
+                    caption=final_cap,
+                    file_name=report_bytes.name
+                )
+                # Send to target channel too
                 report_bytes.seek(0)
-                await poster.send_document(sj['target'], report_bytes, caption=ch_cap,
-                                           parse_mode="html", file_name=report_bytes.name)
+                await poster.send_document(
+                    sj['target'], report_bytes,
+                    caption=final_cap,
+                    file_name=report_bytes.name
+                )
 
         except Exception as rep_err:
             logger.error(f"Could not send report file: {rep_err}", exc_info=True)
