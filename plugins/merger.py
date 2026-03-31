@@ -632,12 +632,6 @@ async def _scan_total_size(client, from_chat, start_id, end_id):
 # Core runner — Chunked, Memory-safe
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _start_task(jid, uid, bot):
-    ev = asyncio.Event()
-    ev.set()
-    _mg_paused[jid] = ev
-    _mg_tasks[jid] = asyncio.create_task(_run_job(jid, uid, bot))
-
 async def _run_job(jid, uid, bot):
     job = await _db_get(jid)
     if not job: return
@@ -668,8 +662,19 @@ async def _run_job(jid, uid, bot):
     try:
         acc = await db.get_bot(uid, job["account_id"])
         if not acc:
-            await _db_up(jid, status="error", error="Account not found"); return
-        client = await start_clone_bot(_CLIENT.client(acc))
+            err_msg = "❌ <b>Merge failed:</b> The selected account was not found. Please re-create the job with a valid account."
+            await _db_up(jid, status="error", error="Account not found")
+            try: await bot.send_message(uid, err_msg)
+            except: pass
+            return
+        try:
+            client = await start_clone_bot(_CLIENT.client(acc))
+        except Exception as conn_err:
+            err_msg = f"❌ <b>Merge failed — could not connect account:</b>\n<code>{conn_err}</code>\n\nPlease check your session string in /settings → Accounts."
+            await _db_up(jid, status="error", error=str(conn_err)[:300])
+            try: await bot.send_message(uid, err_msg)
+            except: pass
+            return
 
         from_chat  = job["from_chat"]
         start_id   = job["start_id"]
@@ -1237,11 +1242,18 @@ async def _run_job(jid, uid, bot):
 
 
 def _start_task(jid, uid, bot):
+    """Create a new background asyncio task for the merge job.
+    Guards against duplicate starts — if a task is already running for this jid, it is a no-op."""
     old = _mg_tasks.get(jid)
-    if old and not old.done(): return
-    ev = asyncio.Event(); ev.set()
+    if old and not old.done():
+        logger.warning(f"[MG] _start_task called for {jid} but task already running — ignoring duplicate.")
+        return
+    ev = asyncio.Event()
+    ev.set()
     _mg_paused[jid] = ev
-    _mg_tasks[jid] = asyncio.create_task(_run_job(jid, uid, bot))
+    task = asyncio.create_task(_run_job(jid, uid, bot))
+    _mg_tasks[jid] = task
+    logger.info(f"[MG] Task created for job {jid} (uid={uid})")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
