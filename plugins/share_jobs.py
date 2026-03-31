@@ -144,6 +144,29 @@ async def _create_share_flow(bot, user_id):
         is_topic = "topic" in (msg_stype.text or "").lower()
         new_share_job[user_id]['is_topic'] = is_topic
 
+        #  STEP 6.5: SELECT ACCOUNT 
+        accounts = await db.get_bots(user_id)
+        if not accounts:
+            return await bot.send_message(user_id, "<b>❌ No accounts found. Add one in /settings → Accounts first.</b>")
+            
+        acc_kb = [[KeyboardButton(f"»  {'Bot' if a.get('is_bot') else 'Userbot'}: {a.get('name', '?')}")] for a in accounts]
+        acc_kb.append([KeyboardButton("/cancel")])
+        
+        msg_acc = await _ask(bot, user_id,
+            "<b>❪ STEP 6.5: SCANNING ACCOUNT ❫</b>\n\nChoose the account to use for reading files from the source channel/topic:\n"
+            "<i>(⚠️ NOTE: Group Topics MUST be scanned by a Userbot. Regular Bots cannot read topics.)</i>",
+            reply_markup=ReplyKeyboardMarkup(acc_kb, resize_keyboard=True, one_time_keyboard=True)
+        )
+        if not msg_acc.text or "/cancel" in msg_acc.text:
+            return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
+            
+        acc_name = msg_acc.text.split(": ", 1)[-1].strip()
+        sel_acc = next((a for a in accounts if a.get("name") == acc_name), None)
+        if not sel_acc:
+            return await bot.send_message(user_id, "<b>‣ Account not found.</b>", reply_markup=ReplyKeyboardRemove())
+            
+        new_share_job[user_id]['account_id'] = sel_acc['id']
+
         if is_topic:
             msg_topic = await _ask(bot, user_id, 
                 "<b>❪ STEP 7: GROUP TOPIC LINK ❫</b>\n\nPaste the link to the Topic (e.g. <code>https://t.me/c/123/45</code>):", 
@@ -276,13 +299,28 @@ async def _build_share_links(bot, user_id, sj, info_msg):
 
         bot_usr = poster.me.username
 
+        await safe_edit("<i>»  Starting scanning client...</i>")
+        try:
+            from plugins.test import _CLIENT, start_clone_bot
+            acc = await db.get_bot(user_id, sj.get("account_id"))
+            if not acc:
+                return await safe_edit("‣  Scanning Account not found.")
+            scanner_client = await start_clone_bot(_CLIENT.client(acc))
+            # Pre-fetch cache dialogs
+            try:
+                await scanner_client.get_chat(sj['source'])
+            except:
+                pass
+        except Exception as e:
+            return await safe_edit(f"‣  Failed to start scanning account: {e}")
+
         await safe_edit("<i>»  Scanning database channel and generating links...</i>")
 
         # ===== DEFINITIVE CHANNEL_INVALID FIX =====
         # The Share Bot uses in_memory=True; it has ZERO peer cache after every restart.
         # SOLUTION: Use the MAIN BOT (which has a persistent SQLite session + is admin)
         # to resolve the InputPeerChannel, then invoke channels.GetMessages on the raw layer
-        # of the MAIN BOT directly — we never ask the Share Bot (worker) to touch the DB channel.
+        # of the SCANNING CLIENT directly — we never ask the Share Bot (worker) to touch the DB channel.
         # The Share Bot is only used for POSTING to the public target channel and for
         # DELIVERING files to users (it IS admin there by the user's configuration).
         from pyrogram.raw.functions.channels import GetMessages as ChannelGetMessages
@@ -290,14 +328,14 @@ async def _build_share_links(bot, user_id, sj, info_msg):
 
         source_chat_id = sj['source']
 
-        # Step 1: Resolve the database channel peer using the MAIN BOT (always works)
+        # Step 1: Resolve the database channel peer using the SCANNING CLIENT (always works)
         try:
-            db_peer = await bot.resolve_peer(source_chat_id)
+            db_peer = await scanner_client.resolve_peer(source_chat_id)
         except Exception as e:
             return await safe_edit(
                 f"<b>‣  Cannot Access Database Channel</b>\n\n"
                 f"<code>{e}</code>\n\n"
-                f"The Main Bot (@{(await bot.get_me()).username}) must be an admin in the hidden database channel."
+                f"The scanning account must be a member or admin in the hidden database channel."
             )
 
         # Inject TARGET CHANNEL peer into poster so userbots don't get CHANNEL_INVALID
@@ -331,7 +369,7 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             await safe_edit(f"<i>»  Scanning entire Group Topic {sj['topic_id']}...</i>")
             try:
                 # Iterate all messages inside the topic
-                async for m in bot.get_discussion_replies(sj['source'], sj['topic_id']):
+                async for m in scanner_client.get_discussion_replies(sj['source'], sj['topic_id']):
                     if m and not m.empty:
                         all_valid_msgs.append(m)
                     total_scanned += 1
@@ -350,7 +388,7 @@ async def _build_share_links(bot, user_id, sj, info_msg):
 
                 for attempt in range(6):
                     try:
-                        msgs = await bot.get_messages(sj['source'], msg_ids)
+                        msgs = await scanner_client.get_messages(sj['source'], msg_ids)
                         if not isinstance(msgs, list): msgs = [msgs]
                         
                         for m in msgs:
