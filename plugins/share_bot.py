@@ -353,7 +353,9 @@ async def _process_start(client, message):
             suc_tpl = (await db.get_share_bot_text(bot_id, "success_msg") if bot_id else "") or \
                       await db.get_share_text("success_msg", "")
             txt = (format_msg(suc_tpl, message.from_user) if suc_tpl
-                   else f"<b>»  {total} file(s) delivered!</b>{fail_note}")
+                   else f"<i>‣  Important: {total} file(s) delivered! Due to copyright, all messages "
+                        f"will auto-delete after 3 hours. "
+                        f"To re-access, simply click the same link button again.{fail_note}</i>")
             await message.reply_text(txt)
 
     except Exception as e:

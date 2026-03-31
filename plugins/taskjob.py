@@ -625,7 +625,7 @@ async def _render_taskjob_list(bot, user_id: int, message_or_query):
             "👇 Create your first task job below!</i>"
         )
         btns = InlineKeyboardMarkup([[
-            InlineKeyboardButton("»  Create Task Job", callback_data="tj#new")
+            InlineKeyboardButton("➕ Cʀᴇᴀᴛᴇ Tᴀsᴋ Jᴏʙ", callback_data="tj#new")
         ]])
     else:
         lines = ["<b>»  Your Task Jobs</b>\n"]
@@ -647,19 +647,19 @@ async def _render_taskjob_list(bot, user_id: int, message_or_query):
             short = jid[-6:]
             row = []
             if st == "running":
-                row.append(InlineKeyboardButton(f"⏸ Pause [{short}]",  callback_data=f"tj#pause#{jid}"))
-                row.append(InlineKeyboardButton(f"⏹ Stop [{short}]",   callback_data=f"tj#stop#{jid}"))
+                row.append(InlineKeyboardButton(f"⏸ Pᴀᴜsᴇ [{short}]",  callback_data=f"tj#pause#{jid}"))
+                row.append(InlineKeyboardButton(f"⏹ Sᴛᴏᴘ [{short}]",   callback_data=f"tj#stop#{jid}"))
             elif st == "paused":
-                row.append(InlineKeyboardButton(f"»  Resume [{short}]", callback_data=f"tj#resume#{jid}"))
-                row.append(InlineKeyboardButton(f"⏹ Stop [{short}]",   callback_data=f"tj#stop#{jid}"))
+                row.append(InlineKeyboardButton(f"▶️ Rᴇsᴜᴍᴇ [{short}]", callback_data=f"tj#resume#{jid}"))
+                row.append(InlineKeyboardButton(f"⏹ Sᴛᴏᴘ [{short}]",   callback_data=f"tj#stop#{jid}"))
             else:
-                row.append(InlineKeyboardButton(f"»  Start [{short}]",  callback_data=f"tj#start#{jid}"))
-            row.append(InlineKeyboardButton(f"»  [{short}]", callback_data=f"tj#info#{jid}"))
-            row.append(InlineKeyboardButton(f"»  [{short}]",  callback_data=f"tj#del#{jid}"))
+                row.append(InlineKeyboardButton(f"▶️ Sᴛᴀʀᴛ [{short}]",  callback_data=f"tj#start#{jid}"))
+            row.append(InlineKeyboardButton(f"ℹ️ Iɴғᴏ [{short}]", callback_data=f"tj#info#{jid}"))
+            row.append(InlineKeyboardButton(f"🗑 Dᴇʟᴇᴛᴇ [{short}]",  callback_data=f"tj#del#{jid}"))
             btns_list.append(row)
 
-        btns_list.append([InlineKeyboardButton("»  Create Task Job", callback_data="tj#new")])
-        btns_list.append([InlineKeyboardButton("»  Refresh",         callback_data="tj#list")])
+        btns_list.append([InlineKeyboardButton("➕ Cʀᴇᴀᴛᴇ Tᴀsᴋ Jᴏʙ", callback_data="tj#new")])
+        btns_list.append([InlineKeyboardButton("🔄 Rᴇғʀᴇsʜ",         callback_data="tj#list")])
         btns = InlineKeyboardMarkup(btns_list)
 
     try:
@@ -731,7 +731,7 @@ async def tj_info_cb(bot, query):
         text += f"\n<b>‣  Error:</b> <code>{job['error']}</code>"
 
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[
-        InlineKeyboardButton("«  Back", callback_data="tj#list")
+        InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="tj#list")
     ]]))
 
 
@@ -768,12 +768,12 @@ async def tj_resume_cb(bot, query):
     if ev and job_id in _task_jobs and not _task_jobs[job_id].done():
         ev.set()
         await _tj_update(job_id, status="running")
-        await query.answer("»  Job resumed!", show_alert=False)
+        await query.answer("▶️ Job resumed!", show_alert=False)
     else:
         # Task died while paused — restart it fresh from saved cursor
         await _tj_update(job_id, status="running")
         _start_task(job_id, user_id)
-        await query.answer("»  Job restarted from saved position!", show_alert=False)
+        await query.answer("▶️ Job restarted from saved position!", show_alert=False)
 
     await _render_taskjob_list(bot, user_id, query)
 
@@ -813,7 +813,7 @@ async def tj_start_cb(bot, query):
 
     await _tj_update(job_id, status="running")
     _start_task(job_id, user_id)
-    await query.answer("»  Task Job started!", show_alert=False)
+    await query.answer("▶️ Task Job started!", show_alert=False)
     await _render_taskjob_list(bot, user_id, query)
 
 
@@ -834,7 +834,7 @@ async def tj_del_cb(bot, query):
     if ev: ev.set()
 
     await _tj_delete(job_id)
-    await query.answer("»  Task Job deleted.", show_alert=False)
+    await query.answer("🗑 Task Job deleted.", show_alert=False)
     await _render_taskjob_list(bot, user_id, query)
 
 

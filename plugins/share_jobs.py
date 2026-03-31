@@ -26,7 +26,7 @@ from plugins.test import CLIENT
 def _sc(text: str) -> str:
     return text.translate(str.maketrans(
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
-        "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘQʀꜱᴛᴜᴠᴡxʏᴢᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘQʀꜱᴛᴜᴠᴡxʏᴢ"
+        "𝗮𝗯𝗰𝗱𝗲𝗳𝗴𝗵𝗶𝗷𝗸𝗹𝗺𝗻𝗼𝗽𝗾𝗿𝘀𝘁𝘂𝘃𝘄𝘅𝘆𝘇𝗔𝗕𝗖𝗗𝗘𝗙𝗚𝗛𝗜𝗝𝗞𝗟𝗠𝗡𝗢𝗣𝗤𝗥𝗦𝗧𝗨𝗩𝗪𝗫𝗬𝗭"
     ))
 
 new_share_job = {}
@@ -149,19 +149,27 @@ async def _create_share_flow(bot, user_id):
         if not accounts:
             return await bot.send_message(user_id, "<b>❌ No accounts found. Add one in /settings → Accounts first.</b>")
             
-        acc_kb = [[KeyboardButton(f"»  {'Bot' if a.get('is_bot') else 'Userbot'}: {a.get('name', '?')}")] for a in accounts]
+        if is_topic:
+            userbots = [a for a in accounts if not a.get("is_bot", True)]
+            if not userbots:
+                return await bot.send_message(user_id, "<b>❌ You selected 'Group Topic', but you have no Userbot added!</b>\nBots cannot scan Group Topics. Please go to /settings → Accounts and add a Userbot first.")
+            valid_accounts = userbots
+        else:
+            valid_accounts = accounts
+            
+        acc_kb = [[KeyboardButton(f"»  {'Bot' if a.get('is_bot', True) else 'Userbot'}: {a.get('name', '?')}")] for a in valid_accounts]
         acc_kb.append([KeyboardButton("/cancel")])
         
         msg_acc = await _ask(bot, user_id,
             "<b>❪ STEP 6.5: SCANNING ACCOUNT ❫</b>\n\nChoose the account to use for reading files from the source channel/topic:\n"
-            "<i>(⚠️ NOTE: Group Topics MUST be scanned by a Userbot. Regular Bots cannot read topics.)</i>",
+            "<i>(⚠️ NOTE: Group Topics MUST be scanned by a Userbot.)</i>",
             reply_markup=ReplyKeyboardMarkup(acc_kb, resize_keyboard=True, one_time_keyboard=True)
         )
         if not msg_acc.text or "/cancel" in msg_acc.text:
             return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
             
         acc_name = msg_acc.text.split(": ", 1)[-1].strip()
-        sel_acc = next((a for a in accounts if a.get("name") == acc_name), None)
+        sel_acc = next((a for a in valid_accounts if a.get("name") == acc_name), None)
         if not sel_acc:
             return await bot.send_message(user_id, "<b>‣ Account not found.</b>", reply_markup=ReplyKeyboardRemove())
             
@@ -911,12 +919,12 @@ async def _build_share_links(bot, user_id, sj, info_msg):
                 )
 
                 dm_cap = (
-                    f"**Report File**\n\n<blockquote expandable>{dm_header}{en_body}</blockquote>"
-                    f"\n\n<blockquote expandable>{hi_body}</blockquote>"
+                    f"<b>Report File</b>\n\n<blockquote>{dm_header}{en_body}</blockquote>"
+                    f"\n\n<blockquote>{hi_body}</blockquote>"
                 )
                 ch_cap = (
-                    f"**Report File**\n\n<blockquote expandable>{ch_header}{en_body}</blockquote>"
-                    f"\n\n<blockquote expandable>{hi_body}</blockquote>"
+                    f"<b>Report File</b>\n\n<blockquote>{ch_header}{en_body}</blockquote>"
+                    f"\n\n<blockquote>{hi_body}</blockquote>"
                 )
 
             else:
@@ -930,8 +938,8 @@ async def _build_share_links(bot, user_id, sj, info_msg):
                     + _sc("All currently available files have been posted here. "
                            "New episodes will be added as they arrive. Enjoy and stay tuned!")
                 )
-                dm_cap = f"**Status**\n\n<blockquote expandable>{dm_ongoing}</blockquote>"
-                ch_cap = f"**Status**\n\n<blockquote expandable>{ch_ongoing}</blockquote>"
+                dm_cap = f"<b>Status</b>\n\n<blockquote>{dm_ongoing}</blockquote>"
+                ch_cap = f"<b>Status</b>\n\n<blockquote>{ch_ongoing}</blockquote>"
 
             # Send to admin DM — independent of channel
             try:

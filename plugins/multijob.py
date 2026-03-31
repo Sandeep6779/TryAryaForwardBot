@@ -670,8 +670,8 @@ async def _render_mj_list(bot, user_id: int, msg_or_query):
             "👇 Create your first Multi Job below!</i>"
         )
         btns = InlineKeyboardMarkup([
-            [InlineKeyboardButton("»  Cʀᴇᴀᴛᴇ Mᴜʟᴛɪ Jᴏʙ", callback_data="mj#new")],
-            [InlineKeyboardButton("⫷ Bᴀᴄᴋ", callback_data="back")]
+            [InlineKeyboardButton("➕ Cʀᴇᴀᴛᴇ Mᴜʟᴛɪ Jᴏʙ", callback_data="mj#new")],
+            [InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="back")]
         ])
     else:
         lines = ["<b>»  Your Multi Jobs</b>\n"]
@@ -705,18 +705,18 @@ async def _render_mj_list(bot, user_id: int, msg_or_query):
                 row.append(InlineKeyboardButton(f"⏸ Pᴀᴜsᴇ [{short}]", callback_data=f"mj#pause#{jid}"))
                 row.append(InlineKeyboardButton(f"⏹ Sᴛᴏᴘ [{short}]", callback_data=f"mj#stop#{jid}"))
             elif st == "paused":
-                row.append(InlineKeyboardButton(f"»  Rᴇsᴜᴍᴇ [{short}]", callback_data=f"mj#resume#{jid}"))
+                row.append(InlineKeyboardButton(f"▶️ Rᴇsᴜᴍᴇ [{short}]", callback_data=f"mj#resume#{jid}"))
                 row.append(InlineKeyboardButton(f"⏹ Sᴛᴏᴘ [{short}]", callback_data=f"mj#stop#{jid}"))
             else:
-                row.append(InlineKeyboardButton(f"»  Sᴛᴀʀᴛ [{short}]", callback_data=f"mj#start#{jid}"))
-            row.append(InlineKeyboardButton(f"»  Iɴғᴏ [{short}]", callback_data=f"mj#info#{jid}"))
+                row.append(InlineKeyboardButton(f"▶️ Sᴛᴀʀᴛ [{short}]", callback_data=f"mj#start#{jid}"))
+            row.append(InlineKeyboardButton(f"ℹ️ Iɴғᴏ [{short}]", callback_data=f"mj#info#{jid}"))
             row.append(InlineKeyboardButton(f"✏️ Nᴀᴍᴇ [{short}]", callback_data=f"mj#rename#{jid}"))
-            row.append(InlineKeyboardButton(f"»  Dᴇʟᴇᴛᴇ [{short}]",  callback_data=f"mj#del#{jid}"))
+            row.append(InlineKeyboardButton(f"🗑 Dᴇʟᴇᴛᴇ [{short}]",  callback_data=f"mj#del#{jid}"))
             btns_list.append(row)
 
-        btns_list.append([InlineKeyboardButton("»  Cʀᴇᴀᴛᴇ Mᴜʟᴛɪ Jᴏʙ", callback_data="mj#new")])
-        btns_list.append([InlineKeyboardButton("»  Rᴇғʀᴇsʜ",           callback_data="mj#list")])
-        btns_list.append([InlineKeyboardButton("⫷ Bᴀᴄᴋ", callback_data="back")])
+        btns_list.append([InlineKeyboardButton("➕ Cʀᴇᴀᴛᴇ Mᴜʟᴛɪ Jᴏʙ", callback_data="mj#new")])
+        btns_list.append([InlineKeyboardButton("🔄 Rᴇғʀᴇsʜ",           callback_data="mj#list")])
+        btns_list.append([InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="back")])
         btns = InlineKeyboardMarkup(btns_list)
 
     try:
@@ -807,7 +807,7 @@ async def mj_info_cb(bot, query):
         text += f"\n<b>‣  Error:</b> <code>{job['error']}</code>"
 
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[
-        InlineKeyboardButton("«  Bᴀᴄᴋ", callback_data="mj#list")
+        InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="mj#list")
     ]]))
 
 
@@ -837,11 +837,11 @@ async def mj_resume_cb(bot, query):
     if ev and job_id in _mj_tasks and not _mj_tasks[job_id].done():
         ev.set()
         await _mj_update(job_id, status="running")
-        await query.answer("»  Resumed!", show_alert=False)
+        await query.answer("▶️ Resumed!", show_alert=False)
     else:
         await _mj_update(job_id, status="running")
         _mj_start_task(job_id, user_id)
-        await query.answer("»  Restarted from saved position!", show_alert=False)
+        await query.answer("▶️ Restarted from saved position!", show_alert=False)
     await _render_mj_list(bot, user_id, query)
 
 
@@ -873,7 +873,7 @@ async def mj_start_cb(bot, query):
         return await query.answer("Already running!", show_alert=True)
     await _mj_update(job_id, status="running")
     _mj_start_task(job_id, user_id)
-    await query.answer("»  Job started!", show_alert=False)
+    await query.answer("▶️ Job started!", show_alert=False)
     await _render_mj_list(bot, user_id, query)
 
 
@@ -890,7 +890,7 @@ async def mj_del_cb(bot, query):
     ev = _mj_paused.pop(job_id, None)
     if ev: ev.set()
     await _mj_delete(job_id)
-    await query.answer("»  Job deleted.", show_alert=False)
+    await query.answer("🗑 Job deleted.", show_alert=False)
     await _render_mj_list(bot, user_id, query)
 
 

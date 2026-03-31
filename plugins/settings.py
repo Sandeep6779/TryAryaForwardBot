@@ -92,7 +92,7 @@ async def settings(client, message):
 async def settings_query(bot, query):
   user_id = query.from_user.id
   i, type = query.data.split("#")
-  buttons = [[InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data="settings#main")]]
+  buttons = [[InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data="settings#main")]]
   
   if type=="main":
      user_id = query.from_user.id
@@ -108,29 +108,29 @@ async def settings_query(bot, query):
      buttons = []
      
      # ---- BOTS SECTION ----
-     buttons.append([InlineKeyboardButton("    »  ʙᴏᴛꜱ    ", callback_data="settings#noop")])
+     buttons.append([InlineKeyboardButton("    🤖 ʙᴏᴛꜱ    ", callback_data="settings#noop")])
      for b in normal_bots:
-         active_mark = "»  " if b.get('active') else ""
-         buttons.append([InlineKeyboardButton(f"{active_mark}»  {b['name']}", callback_data=f"settings#editbot_{b['id']}")])
+         active_mark = "✔️ " if b.get('active') else " "
+         buttons.append([InlineKeyboardButton(f"{active_mark} {b['name']}", callback_data=f"settings#editbot_{b['id']}")])
      if len(normal_bots) < 2:
-         buttons.append([InlineKeyboardButton('»  ᴀᴅᴅ ʙᴏᴛ » ', callback_data="settings#addbot")])
+         buttons.append([InlineKeyboardButton('➕ ᴀᴅᴅ ʙᴏᴛ', callback_data="settings#addbot")])
 
      # ---- USERBOTS SECTION ----
-     buttons.append([InlineKeyboardButton("    »  ᴜꜱᴇʀʙᴏᴛꜱ    ", callback_data="settings#noop")])
+     buttons.append([InlineKeyboardButton("    👤 ᴜꜱᴇʀʙᴏᴛꜱ    ", callback_data="settings#noop")])
      for b in userbots:
-         active_mark = "»  " if b.get('active') else ""
-         buttons.append([InlineKeyboardButton(f"{active_mark}»  {b['name']}", callback_data=f"settings#editbot_{b['id']}")])
+         active_mark = "✔️ " if b.get('active') else " "
+         buttons.append([InlineKeyboardButton(f"{active_mark} {b['name']}", callback_data=f"settings#editbot_{b['id']}")])
      if len(userbots) < 2:
-         buttons.append([InlineKeyboardButton('»  ᴀᴅᴅ ᴜꜱᴇʀʙᴏᴛ » ', callback_data="settings#adduserbot")])
+         buttons.append([InlineKeyboardButton('➕ ᴀᴅᴅ ᴜꜱᴇʀʙᴏᴛ', callback_data="settings#adduserbot")])
          
-     buttons.append([InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data="settings#main")])
+     buttons.append([InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data="settings#main")])
      
      text = (
-         "<b><u>»  My Accounts</u></b>\n\n"
-         f"<b>»  Bots:</b> {len(normal_bots)}/2\n"
-         f"<b>»  Userbots:</b> {len(userbots)}/2\n\n"
+         "<b><u>👥 My Accounts</u></b>\n\n"
+         f"<b>🤖 Bots:</b> {len(normal_bots)}/2\n"
+         f"<b>👤 Userbots:</b> {len(userbots)}/2\n\n"
          "<b>Tap an account to view details or set it active.\n"
-         "»  = Currently active for that type.</b>"
+         "✔️ = Currently active for that type.</b>"
      )
      await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
      
@@ -230,7 +230,7 @@ async def settings_query(bot, query):
          buttons.append([InlineKeyboardButton('»  ꜱᴇᴛ ᴀᴄᴛɪᴠᴇ', callback_data=f"settings#setactive_{bott['id']}")])
          
      buttons.append([InlineKeyboardButton('‣  ʀᴇᴍᴏᴠᴇ ‣ ', callback_data=f"settings#removebot_{bott['id']}")])
-     buttons.append([InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data="settings#accounts")])
+     buttons.append([InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data="settings#accounts")])
      await query.message.edit_text(
         TEXT.format(bott['name'], bott['id'], bott['username']),
         reply_markup=InlineKeyboardMarkup(buttons))
@@ -1130,7 +1130,7 @@ async def settings_query(bot, query):
      chat = await db.get_channel_details(user_id, chat_id)
      buttons = [[InlineKeyboardButton('‣  ʀᴇᴍᴏᴠᴇ ‣ ', callback_data=f"settings#removechannel_{chat_id}")
                ],
-               [InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data="settings#channels")]]
+               [InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data="settings#channels")]]
      await query.message.edit_text(
         f"<b><u>»  CHANNEL DETAILS</b></u>\n\n<b>- TITLE:</b> <code>{chat['title']}</code>\n<b>- CHANNEL ID: </b> <code>{chat['chat_id']}</code>\n<b>- USERNAME:</b> {chat['username']}",
         reply_markup=InlineKeyboardMarkup(buttons))
@@ -1564,9 +1564,9 @@ async def main_buttons(user_id=None):
            InlineKeyboardButton('🔀 ᴍᴇʀɢᴇʀ ᴍᴏᴅᴇ »   ⟶  ᴛᴀᴘ ᴛᴏ ꜱᴡɪᴛᴄʜ',
                         callback_data='settings#toggle_mode')
            ],[
-           InlineKeyboardButton('»  ᴀᴄᴄᴏᴜɴᴛꜱ',
+           InlineKeyboardButton('👥 ᴀᴄᴄᴏᴜɴᴛꜱ',
                         callback_data='settings#accounts'),
-           InlineKeyboardButton('🏷 ᴄʜᴀɴɴᴇʟꜱ',
+           InlineKeyboardButton('📢 ᴄʜᴀɴɴᴇʟꜱ',
                         callback_data='settings#channels')
            ],[
            InlineKeyboardButton('🎵 ᴀᴜᴅɪᴏ ᴍᴇʀɢᴇ',
@@ -1574,44 +1574,43 @@ async def main_buttons(user_id=None):
            InlineKeyboardButton('🎬 ᴠɪᴅᴇᴏ ᴍᴇʀɢᴇ',
                         callback_data='mg#video_list')
            ],[
-           InlineKeyboardButton('»  ꜱʜᴀʀᴇ ʙᴏᴛ ꜱᴇᴛᴜᴘ',
+           InlineKeyboardButton('🤖 ꜱʜᴀʀᴇ ʟɪɴᴋ ʙᴏᴛ ꜱᴇᴛᴜᴘ',
                         callback_data='settings#sharebot')
            ],[
-           InlineKeyboardButton('⫷ ʙᴀᴄᴋ', callback_data='back')
+           InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data='back')
            ]]
   else:
       #  FORWARD MODE: Full original menu 
       buttons = [[
-           InlineKeyboardButton('📤 ꜰᴏʀᴡᴀʀᴅ ᴍᴏᴅᴇ »   ⟶  ᴛᴀᴘ ᴛᴏ ꜱᴡɪᴛᴄʜ',
                         callback_data='settings#toggle_mode')
            ],[
-           InlineKeyboardButton('»  ᴀᴄᴄᴏᴜɴᴛꜱ',
+           InlineKeyboardButton('👥 ᴀᴄᴄᴏᴜɴᴛꜱ',
                         callback_data='settings#accounts'),
-           InlineKeyboardButton('🏷 ᴄʜᴀɴɴᴇʟꜱ',
+           InlineKeyboardButton('📢 ᴄʜᴀɴɴᴇʟꜱ',
                         callback_data='settings#channels')
            ],[
-           InlineKeyboardButton('🖋️ ᴄᴀᴘᴛɪᴏɴ',
+           InlineKeyboardButton('📝 ᴄᴀᴘᴛɪᴏɴ',
                         callback_data='settings#caption'),
-           InlineKeyboardButton('🗃 ᴍᴏɴɢᴏᴅʙ',
+           InlineKeyboardButton('🗄️ ᴍᴏɴɢᴏᴅʙ',
                         callback_data='settings#database')
            ],[
-           InlineKeyboardButton('🕵‍♀ ꜰɪʟᴛᴇʀꜱ 🕵‍♀',
+           InlineKeyboardButton('🎯 ꜰɪʟᴛᴇʀꜱ',
                         callback_data='settings#filters'),
-           InlineKeyboardButton('⏹ ʙᴜᴛᴛᴏɴ',
+           InlineKeyboardButton('🖱️ ʙᴜᴛᴛᴏɴꜱ',
                         callback_data='settings#button')
            ],[
-           InlineKeyboardButton('ᴇxᴛʀᴀ ꜱᴇᴛᴛɪɴɢꜱ 🧪',
+           InlineKeyboardButton('🧬 ᴇxᴛʀᴀ ꜱᴇᴛᴛɪɴɢꜱ',
                         callback_data='settings#nextfilters'),
-           InlineKeyboardButton('»  ᴄʟᴇᴀɴ ᴍꜱɢ',
+           InlineKeyboardButton('🧹 ᴄʟᴇᴀɴ ᴍꜱɢ',
                         callback_data='settings#cleanmsg')
            ],[
-           InlineKeyboardButton('»  ʟᴀɴɢᴜᴀɢᴇ / भाषा',
+           InlineKeyboardButton('🌍 ʟᴀɴɢᴜᴀɢᴇ / भाषा',
                         callback_data='settings#lang')
            ],[
-           InlineKeyboardButton('»  ꜱʜᴀʀᴇ ʟɪɴᴋ ʙᴏᴛ ꜱᴇᴛᴜᴘ',
+           InlineKeyboardButton('🤖 ꜱʜᴀʀᴇ ʟɪɴᴋ ʙᴏᴛ ꜱᴇᴛᴜᴘ',
                         callback_data='settings#sharebot')
            ],[
-           InlineKeyboardButton('⫷ ʙᴀᴄᴋ', callback_data='back')
+           InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data='back')
            ]]
   return InlineKeyboardMarkup(buttons)
 

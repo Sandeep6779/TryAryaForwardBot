@@ -92,7 +92,7 @@ async def run(bot, message):
 
         # Ask for mode: Batch vs Live
         mode_btn = ReplyKeyboardMarkup([
-            [KeyboardButton("Bᴀᴛᴄʜ"), KeyboardButton("Lɪᴠᴇ")]
+            [KeyboardButton("📦 Bᴀᴛᴄʜ"), KeyboardButton("⚡ Lɪᴠᴇ")]
         ], resize_keyboard=True, one_time_keyboard=True)
         mode_msg = await bot.ask(message.chat.id, await t(user_id, 'SAVED_MSG_MODE'), reply_markup=mode_btn)
         if mode_msg.text.startswith('/'):
@@ -136,7 +136,7 @@ async def run(bot, message):
                 chat_id = int(chat_id)
             # ── Optional topic/thread selection ──────────────────────────────
             topic_btn = ReplyKeyboardMarkup([
-                [KeyboardButton("✅ Yes, has a topic"), KeyboardButton("❌ No topic")]
+                [KeyboardButton("✅ Yᴇs, ʜᴀs ᴀ ᴛᴏᴘɪᴄ"), KeyboardButton("❌ Nᴏ ᴛᴏᴘɪᴄ")]
             ], resize_keyboard=True, one_time_keyboard=True)
             topic_q = await bot.ask(
                 message.chat.id,
@@ -244,7 +244,7 @@ async def run(bot, message):
     # ------------------------------------------------
 
     order_btn = ReplyKeyboardMarkup([
-        [KeyboardButton("Oʟᴅ ᴛᴏ Nᴇᴡ"), KeyboardButton("Nᴇᴡ ᴛᴏ Oʟᴅ")]
+        [KeyboardButton("🔼 Oʟᴅ ᴛᴏ Nᴇᴡ"), KeyboardButton("🔽 Nᴇᴡ ᴛᴏ Oʟᴅ")]
     ], resize_keyboard=True, one_time_keyboard=True)
     order_msg = await bot.ask(message.chat.id, await t(user_id, 'choose_order'), reply_markup=order_btn)
     if order_msg.text.startswith('/'):
@@ -276,8 +276,8 @@ async def run(bot, message):
         return
     forward_id = f"{user_id}-{skipno.id}"
     buttons = [[
-        InlineKeyboardButton('Yᴇs', callback_data=f"start_public_{forward_id}"),
-        InlineKeyboardButton('Nᴏ', callback_data="close_btn")
+        InlineKeyboardButton('✅ Yᴇs', callback_data=f"start_public_{forward_id}"),
+        InlineKeyboardButton('❌ Nᴏ', callback_data="close_btn")
     ]]
     reply_markup = InlineKeyboardMarkup(buttons)
 

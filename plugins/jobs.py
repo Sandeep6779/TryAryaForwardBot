@@ -760,8 +760,8 @@ async def _render_jobs_list(bot, user_id: int, message_or_query):
             "👇 Create your first job below!</i>"
         )
         btns = InlineKeyboardMarkup([
-            [InlineKeyboardButton("»  Cʀᴇᴀᴛᴇ Nᴇᴡ Jᴏʙ", callback_data="job#new")],
-            [InlineKeyboardButton("⫷ Bᴀᴄᴋ", callback_data="back")]
+            [InlineKeyboardButton("➕ Cʀᴇᴀᴛᴇ Nᴇᴡ Jᴏʙ", callback_data="job#new")],
+            [InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="back")]
         ])
     else:
         lines = ["<b>»  Your Live Jobs</b>\n"]
@@ -904,7 +904,7 @@ async def job_info_cb(bot, query):
         text += f"\n<b>‣  Error:</b> <code>{job['error']}</code>"
 
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[
-        InlineKeyboardButton("«  Bᴀᴄᴋ", callback_data="job#list")
+        InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="job#list")
     ]]))
 
 
@@ -934,7 +934,7 @@ async def job_start_cb(bot, query):
         return await query.answer("Already running!", show_alert=True)
     await _update_job(job_id, status="running")
     _start_job_task(job_id, user_id)
-    await query.answer("»  Job started.", show_alert=False)
+    await query.answer("▶️ Job started.", show_alert=False)
     await _render_jobs_list(bot, user_id, query)
 
 
