@@ -38,12 +38,19 @@ async def start_clone_bot(FwdBot, data=None):
        logger.warning(f"Could not bind share handlers to clone: {e}")
        
    await FwdBot.start()
-   # Feed peers into cache to avoid PeerIdInvalid
+   # Warm up peer cache in background — do NOT block here on 1GB VPS
    try:
-       me = await FwdBot.get_me()
+       me = await asyncio.wait_for(FwdBot.get_me(), timeout=10)
        if not getattr(me, 'is_bot', False):
-           async for _ in FwdBot.get_dialogs(limit=200): pass
-   except Exception as e: pass
+           # Fire-and-forget: warm a small number of dialogs without blocking
+           async def _warm():
+               try:
+                   async for _ in FwdBot.get_dialogs(limit=30): pass
+               except Exception:
+                   pass
+           asyncio.ensure_future(_warm())
+   except Exception:
+       pass
    #
    async def iter_messages(
       chat_id: Union[int, str], 
