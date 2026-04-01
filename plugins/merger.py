@@ -554,27 +554,27 @@ async def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", co
                 cmd2 += ["-c:v","libx264","-preset","superfast","-crf","28",
                          "-c:a","aac","-b:a","128k","-movflags","+faststart","-max_muxing_queue_size","4096"]
             else:
-                # Use concat demuxer + filter_complex for audio re-encode.
-                # The concat demuxer reads from the list file (already absolute/forward-slash paths)
-                # which avoids all Windows backslash path issues with individual -i arguments.
-                cmd2 += ["-f", "concat", "-safe", "0", "-i", lst]
-                fc = "[0:a]" + (f"atempo={atempo}" if atempo and not atempo.startswith("[") else (atempo if atempo else ""))
-                # Build a simpler filter: just concat then optional atempo
-                # For pure concat: no filter_complex needed unless speed != 1.0
+                # CORRECT approach: use filter_complex concat filter.
+                # This fully decodes each audio file independently (handles ANY mix of codecs
+                # e.g. mp3 + m4a + ogg) and concatenates the raw PCM before re-encoding.
+                # The concat DEMUXER approach (previous attempt) only works when all files
+                # share the same codec, so it silently dropped all but the first file.
+                for p in file_list:
+                    cmd2 += ["-i", os.path.abspath(p)]
+                fc = "".join(f"[{i}:a]" for i in range(len(file_list))) + f"concat=n={len(file_list)}:v=0:a=1[a1]"
                 if atempo:
-                    fc_str = f"[0:a]{atempo}[aout]"
-                    map_lbl = "[aout]"
-                    cmd2 += ["-filter_complex", fc_str, "-map", map_lbl]
-                else:
-                    cmd2 += ["-map", "0:a"]
+                    fc += f";[a1]{atempo}[a2]"
+                map_lbl = "[a2]" if atempo else "[a1]"
 
                 if cover and os.path.exists(cover) and not make_video:
-                    cov_abs = os.path.abspath(cover).replace("\\", "/")
-                    cmd2 += ["-i", cov_abs,
-                             "-map", "1:v",
+                    cmd2 += ["-i", os.path.abspath(cover)]
+                    cov_idx = len(file_list)
+                    cmd2 += ["-filter_complex", fc, "-map", map_lbl, "-map", f"{cov_idx}:v",
                              "-id3v2_version", "3",
                              "-metadata:s:v", "title=Album cover",
                              "-metadata:s:v", "comment=Cover (front)"]
+                else:
+                    cmd2 += ["-filter_complex", fc, "-map", map_lbl]
 
                 cmd2 += ["-c:a", "libmp3lame", "-b:a", "192k", "-ar", "48000", "-max_muxing_queue_size", "4096"]
         
