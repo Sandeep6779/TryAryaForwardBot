@@ -394,25 +394,25 @@ async def settings_query(bot, query):
       buttons = [
           [
               InlineKeyboardButton('»  ᴡᴇʟᴄᴏᴍᴇ ᴍꜱɢ',    callback_data=f"settings#sb_set_welcome_{b_id}"),
-              InlineKeyboardButton('🖼  ᴡᴇʟᴄᴏᴍᴇ ɪᴍɢ',  callback_data=f"settings#sb_set_welcome_img_{b_id}"),
           ],
           [InlineKeyboardButton('‣  ᴀʙᴏᴜᴛ',        callback_data=f"settings#sb_about_{b_id}")],
+          [InlineKeyboardButton('🖼  ᴍᴇɴᴜ ɪᴍᴀɢᴇ',  callback_data=f"settings#sb_menu_img_{b_id}")],
           [InlineKeyboardButton('«  ʙᴀᴄᴋ',         callback_data=f"settings#sb_view_{b_id}")],
       ]
       await query.message.edit_text(
-          f"<b>❪ WELCOME & ABOUT ❫</b>\n\n"
+          f"<b>❪ WELCOME, ABOUT & MENU ❫</b>\n\n"
           "Select what you want to configure for this bot:",
           reply_markup=InlineKeyboardMarkup(buttons)
       )
 
-  elif type.startswith("sb_set_welcome_img_"):
-      b_id = type.split("sb_set_welcome_img_")[1]
+  elif type.startswith("sb_menu_img_"):
+      b_id = type.split("sb_menu_img_")[1]
       await query.message.delete()
       ask = await bot.send_message(
           user_id,
-          "<b>🖼 Set Welcome Image</b>\n\n"
-          "Send a photo to use as the welcome banner.\n"
-          "The welcome text will appear as the photo's caption.\n\n"
+          "<b>🖼 Set Menu Image</b>\n\n"
+          "Send a photo to use as the main Menu Image.\n"
+          "This image will appear above the Welcome and About menus.\n\n"
           "Send <code>/clear</code> to remove the current image.\n"
           "Send <code>/cancel</code> to abort."
       )
@@ -423,17 +423,17 @@ async def settings_query(bot, query):
               await resp.delete()
               return await ask.edit_text(
                   "»  Cancelled.",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
               )
 
           if resp.text and resp.text.strip() == "/clear":
               about = await db.get_share_bot_about(b_id)
-              about.pop('welcome_image_id', None)
+              about.pop('menu_image_id', None)
               await db.set_share_bot_about(b_id, about)
               await resp.delete()
               return await ask.edit_text(
-                  "»  Welcome image removed.",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
+                  "»  Menu image removed.",
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
               )
 
           photo = resp.photo
@@ -441,49 +441,57 @@ async def settings_query(bot, query):
               await resp.delete()
               return await ask.edit_text(
                   "‣  No photo received. Please send an image.",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
               )
 
-          # ——————————————————————————————————————————————————————————————————————
-          # KEY FIX: file_id is bot-specific in Telegram.
-          # The photo was sent to the ARYA (admin) bot, so its file_id belongs to Arya.
-          # If the delivery bot tries to send_photo with Arya's file_id, it fails silently.
-          # Solution: ask the delivery bot's client to forward the photo to itself
-          # (its own DM/saved messages), then capture ITS OWN file_id from that message.
-          # ——————————————————————————————————————————————————————————————————————
+          # Robust method: download photo locally then upload from the delivery bot Client
+          import os
           from plugins.share_bot import share_clients
           sb_client = share_clients.get(str(b_id))
-
-          final_file_id = photo.file_id  # default: Arya bot's id (may fail in delivery bot)
+          
+          final_file_id = None
+          
           if sb_client:
-              try:
-                  # Forward from Arya's chat to the admin's DM using the delivery bot
-                  relay = await sb_client.send_photo(
-                      chat_id=user_id,
-                      photo=photo.file_id,
-                  )
-                  if relay and relay.photo:
-                      final_file_id = relay.photo.file_id
-                  # Clean up relay message from admin's DM
+              dl_path = await bot.download_media(photo)
+              if dl_path:
                   try:
-                      await relay.delete()
-                  except Exception:
-                      pass
-              except Exception as relay_err:
-                  logger.warning(f"Welcome image relay failed, using Arya's file_id: {relay_err}")
+                      # Uploading local file ensures valid file_id natively known to the delivery bot
+                      relay = await sb_client.send_photo(
+                          chat_id=user_id,
+                          photo=dl_path,
+                      )
+                      if relay and relay.photo:
+                          final_file_id = relay.photo.file_id
+                      try:
+                          await relay.delete()
+                      except Exception: pass
+                  except Exception as relay_err:
+                      logger.warning(f"Menu image relay failed: {relay_err}")
+                      final_file_id = None
+                  
+                  try:
+                      os.remove(dl_path)
+                  except Exception: pass
+
+          if not final_file_id:
+               await ask.edit_text(
+                   "<b>‣  ERROR:</b> The Share Bot must be started and active to register a menu image. Make sure the bot is running.",
+                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
+               )
+               return
 
           about = await db.get_share_bot_about(b_id)
-          about['welcome_image_id'] = final_file_id
+          about['menu_image_id'] = final_file_id
           await db.set_share_bot_about(b_id, about)
           await resp.delete()
           await ask.edit_text(
-              "»  Welcome image saved! Users will see it with the welcome message.",
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
+              "»  ✅ Menu image configured successfully!",
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
           )
       except asyncio.TimeoutError:
           await ask.edit_text(
               "Timeout.",
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
           )
 
   elif type.startswith("sb_set_welcome_"):
@@ -655,19 +663,16 @@ async def settings_query(bot, query):
       bt = next((x for x in bots if str(x['id']) == str(b_id)), None)
       if not bt: return await query.answer("Bot not found!")
       about = await db.get_share_bot_about(b_id)
-      img_set = "»  Set" if about.get('image_id') else "‣  None"
       txt_set = "»  Custom" if about.get('custom_text') else "»  Default"
       btns = [
-          [InlineKeyboardButton('🖼 ꜱᴇᴛ ᴀʙᴏᴜᴛ ɪᴍᴀɢᴇ',   callback_data=f"settings#sb_about_img_{b_id}")],
           [InlineKeyboardButton('»  ᴇᴅɪᴛ ᴀʙᴏᴜᴛ ᴛᴇxᴛ',   callback_data=f"settings#sb_about_txt_{b_id}")],
           [InlineKeyboardButton('»  ᴇᴅɪᴛ ᴏᴡɴᴇʀ',         callback_data=f"settings#sb_about_owner_{b_id}")],
           [InlineKeyboardButton('»  ᴇᴅɪᴛ ᴠᴇʀꜱɪᴏɴ',       callback_data=f"settings#sb_about_ver_{b_id}")],
           [InlineKeyboardButton('»  ʀᴇꜱᴇᴛ ᴛᴏ ᴅᴇꜰᴀᴜʟᴛ',    callback_data=f"settings#sb_about_reset_{b_id}")],
-          [InlineKeyboardButton('«  ʙᴀᴄᴋ',                callback_data=f"settings#sb_view_{b_id}")],
+          [InlineKeyboardButton('«  ʙᴀᴄᴋ',                callback_data=f"settings#sb_wa_{b_id}")],
       ]
       await query.message.edit_text(
           f"<b>‣  Aʙᴏᴜᴛ Sᴇᴄᴛɪᴏɴ — {bt['name']}</b>\n\n"
-          f"<b>Image:</b> {img_set}\n"
           f"<b>Text:</b> {txt_set}\n"
           f"<b>Owner:</b> {about.get('owner_name', 'JeetX')}\n"
           f"<b>Version:</b> {about.get('version', 'V1.0')}\n\n"
@@ -675,27 +680,6 @@ async def settings_query(bot, query):
           reply_markup=InlineKeyboardMarkup(btns)
       )
 
-  elif type.startswith("sb_about_img_"):
-      b_id = type.split("sb_about_img_")[1]
-      await query.message.delete()
-      ask = await bot.send_message(user_id,
-          "<b>🖼 Send the About image</b> (photo).\n"
-          "This image will appear in the About section.\n"
-          "/cancel to abort."
-      )
-      try:
-          resp = await bot.listen(chat_id=user_id, timeout=120)
-          if resp.text and resp.text.strip() == "/cancel":
-              return await ask.edit_text("Cancelled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
-          photo = resp.photo
-          if not photo:
-              return await ask.edit_text("‣  No photo received.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
-          about = await db.get_share_bot_about(b_id)
-          about['image_id'] = photo.file_id
-          await db.set_share_bot_about(b_id, about)
-          await ask.edit_text("»  About image saved!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
-      except asyncio.TimeoutError:
-          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
 
   elif type.startswith("sb_about_txt_"):
       b_id = type.split("sb_about_txt_")[1]

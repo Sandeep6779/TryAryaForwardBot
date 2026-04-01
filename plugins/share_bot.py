@@ -237,7 +237,7 @@ async def _process_start(client, message):
             rows.append([
                 InlineKeyboardButton(
                     "Tʀʏ Aɢᴀɪɴ",
-                    url=f"https://t.me/{client.me.username}?start={uuid_str}"
+                    callback_data=f"fsub_chk_{uuid_str}"
                 )
             ])
 
@@ -385,8 +385,8 @@ async def _send_welcome(client, message, bot_id: str = None):
     txt = _get_welcome_text(user, bot_name, custom_wel)
 
     bot_about = await db.get_share_bot_about(bot_id) if bot_id else {}
-    # welcome_image_id is set by admin via "🖼 Welcome Image" in per-bot settings
-    welcome_img = bot_about.get('welcome_image_id') if bot_about else None
+    # menu_image_id is set by admin via "🖼 Menu Image" in per-bot settings
+    welcome_img = bot_about.get('menu_image_id') if bot_about else None
 
     buttons = [
         [
@@ -532,23 +532,66 @@ async def _process_delivery_cancel(client, query):
     else:
         await query.answer("Already finished or cancelled.", show_alert=True)
 
-
-async def _process_menu_image(client, message):
-    from config import Config
-    if getattr(message.from_user, 'id', 0) not in Config.BOT_OWNER_ID:
-        return
-        
-    bot_id = str(client.me.id) if client.me else None
-    if not bot_id: return
+async def _process_fsub_check(client, query):
+    """Handle Try Again callback for Force Subscribe."""
+    uuid_str = query.data.replace("fsub_chk_", "", 1)
     
-    if message.reply_to_message and message.reply_to_message.photo:
-        photo = message.reply_to_message.photo
-        about = await db.get_share_bot_about(bot_id) if bot_id else {}
-        about['welcome_image_id'] = photo.file_id
-        await db.set_share_bot_about(bot_id, about)
-        await message.reply_text("<b>✅ Menu Image Updated!</b>\n\nThis image will now be used across the Welcome, Help, and About menus for this specific delivery bot.")
-    else:
-        await message.reply_text("<b>‣ To set the Menu Image:</b>\nPlease reply to an image with <code>/menuimage</code>.")
+    # 1. Animation Step 1
+    await query.message.edit_text("Lᴇᴛ ᴍᴇ ᴄʜᴇᴄᴋ ꜰᴏʀ ʏᴏᴜ...")
+    await asyncio.sleep(1.5)
+    
+    bot_id = str(client.me.id) if client.me else None
+    user_id = query.from_user.id
+    
+    # 2. Re-check FSub
+    fsub_channels = await db.get_bot_fsub_channels(bot_id) if bot_id else []
+    if not fsub_channels:
+        fsub_channels = await db.get_share_fsub_channels()
+        
+    not_joined = []
+    if fsub_channels:
+        not_joined = await check_all_subscriptions(client, user_id, fsub_channels, bot_id)
+        
+    if not_joined:
+        # Animation Step 2: Failed
+        f_buttons = []
+        channel_num = 1
+        for ch in not_joined:
+            invite  = ch.get('invite_link', '')
+            is_jr   = ch.get('join_request', False)
+            label   = f"Jᴏɪɴ Cʜᴀɴɴᴇʟ {channel_num}"
+            channel_num += 1
+            if invite:
+                emoji = "» " if is_jr else "» "
+                f_buttons.append(InlineKeyboardButton(f"{emoji} {label}", url=invite))
+
+        rows = []
+        for i in range(0, len(f_buttons), 2):
+            rows.append(f_buttons[i:i+2])
+        rows.append([
+            InlineKeyboardButton(
+                "Tʀʏ Aɢᴀɪɴ",
+                callback_data=f"fsub_chk_{uuid_str}"
+            )
+        ])
+        
+        await query.message.edit_text(
+            "I ᴄᴀɴɴᴏᴛ ɢɪᴠᴇ ʏᴏᴜ ᴀᴄᴄᴇꜱꜱ ʙᴇᴄᴀᴜꜱᴇ ʏᴏᴜ ʜᴀᴠᴇ ɴᴏᴛ ꜰᴜʟꜰɪʟʟᴇᴅ ᴛʜᴇ ʀᴇQᴜɪʀᴇᴍᴇɴᴛꜱ. Tʀʏ ᴀɢᴀɪɴ.",
+            reply_markup=InlineKeyboardMarkup(rows)
+        )
+        return
+
+    # Animation Step 2: Success
+    # Delete the check message and hand off to _process_start by spoofing a message
+    try:
+        await query.message.delete()
+    except Exception: pass
+    
+    msg = query.message
+    msg.from_user = query.from_user
+    msg.command = ["start", uuid_str]
+    await _process_start(client, msg)
+
 
 
 
@@ -572,9 +615,9 @@ def register_share_handlers(app: Client):
         _process_delivery_cancel,
         filters.regex(r'^cancel_dl_')
     ))
-    app.add_handler(MessageHandler(
-        _process_menu_image,
-        filters.private & filters.command(["menuimage", "setmenuimage", "setimage"])
+    app.add_handler(CallbackQueryHandler(
+        _process_fsub_check,
+        filters.regex(r'^fsub_chk_')
     ))
     logger.info(f"Handlers registered on {app.name}")
 
