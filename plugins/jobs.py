@@ -1247,10 +1247,15 @@ async def _create_job_flow(bot, user_id: int):
         from_chat = from_chat_raw
         if from_chat.lstrip('-').isdigit():
             from_chat = int(from_chat)
+            if from_chat > 0 and len(str(from_chat)) >= 13 and str(from_chat).startswith("100"):
+                from_chat = -from_chat
         elif "t.me/c/" in from_chat:
             parts = from_chat.split("t.me/c/")[1].split("/")
             if parts[0].isdigit():
-                from_chat = int(f"-100{parts[0]}")
+                if parts[0].startswith("100") and len(parts[0]) >= 13:
+                    from_chat = int(f"-{parts[0]}")
+                else:
+                    from_chat = int(f"-100{parts[0]}")
         elif "t.me/" in from_chat:
             username = from_chat.split("t.me/")[1].split("/")[0].split("?")[0]
             if not username.startswith("+"):

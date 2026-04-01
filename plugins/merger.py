@@ -350,22 +350,22 @@ async def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", co
         proc = await asyncio.create_subprocess_exec(
             *cmd_list, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
-        stderr_lines = []
+        # Use a deque to keep only the LAST N chunks — FFmpeg prints its version
+        # banner first (which is useless noise) and the actual error at the END.
+        from collections import deque
+        stderr_tail = deque(maxlen=60)  # keep last 60 chunks ~ last ~240KB
         async def _reader():
             while True:
                 try:
-                    chunk = await proc.stderr.read(4096)
+                    raw = await proc.stderr.read(4096)
                 except Exception:
                     break
-                if not chunk: break
-                lstr = chunk.decode('utf-8', errors='replace')
-                stderr_lines.append(lstr)
-                # Keep memory minimal
-                if len(stderr_lines) > 20: stderr_lines.pop(0)
+                if not raw: break
+                lstr = raw.decode('utf-8', errors='replace')
+                stderr_tail.append(lstr)
                 if progress_cb:
                     matches = re.findall(r'time=(\d+):(\d+):(\d+\.\d+)', lstr)
                     if matches:
-                        # matches[-1] gives the latest time tuple (HH, MM, SS.ms) in this chunk
                         h, m_m, s = float(matches[-1][0]), float(matches[-1][1]), float(matches[-1][2])
                         await progress_cb(h*3600 + m_m*60 + s)
         try:
@@ -374,9 +374,10 @@ async def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", co
             try: proc.kill()
             except: pass
             return False, "FFmpeg timed out"
-        outerr = "".join(stderr_lines[-50:])
+        outerr = "".join(stderr_tail)
         if proc.returncode == 0: return True, ""
-        return False, outerr
+        # Return only the last ~2000 chars so the real error is visible
+        return False, outerr[-2000:] if len(outerr) > 2000 else outerr
 
     lst = output_path + ".list.txt"
     vconcat_txt = output_path + ".vconcat.txt"
@@ -553,22 +554,29 @@ async def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", co
                 cmd2 += ["-c:v","libx264","-preset","superfast","-crf","28",
                          "-c:a","aac","-b:a","128k","-movflags","+faststart","-max_muxing_queue_size","4096"]
             else:
-                for p in file_list: cmd2 += ["-i", os.path.abspath(p)]
-                fc = "".join(f"[{i}:a]" for i in range(len(file_list))) + f"concat=n={len(file_list)}:v=0:a=1[a1]"
-                if atempo: fc += f";[a1]{atempo}[a2]"
-                map_lbl = "[a2]" if atempo else "[a1]"
-                
-                if cover and os.path.exists(cover) and not make_video:
-                    cmd2 += ["-i", os.path.abspath(cover)]
-                    cov_idx = len(file_list)
-                    cmd2 += ["-filter_complex", fc, "-map", map_lbl, "-map", f"{cov_idx}:v",
-                             "-id3v2_version","3",
-                             "-metadata:s:v","title=Album cover",
-                             "-metadata:s:v","comment=Cover (front)"]
+                # Use concat demuxer + filter_complex for audio re-encode.
+                # The concat demuxer reads from the list file (already absolute/forward-slash paths)
+                # which avoids all Windows backslash path issues with individual -i arguments.
+                cmd2 += ["-f", "concat", "-safe", "0", "-i", lst]
+                fc = "[0:a]" + (f"atempo={atempo}" if atempo and not atempo.startswith("[") else (atempo if atempo else ""))
+                # Build a simpler filter: just concat then optional atempo
+                # For pure concat: no filter_complex needed unless speed != 1.0
+                if atempo:
+                    fc_str = f"[0:a]{atempo}[aout]"
+                    map_lbl = "[aout]"
+                    cmd2 += ["-filter_complex", fc_str, "-map", map_lbl]
                 else:
-                    cmd2 += ["-filter_complex", fc, "-map", map_lbl]
-                    
-                cmd2 += ["-c:a","libmp3lame","-b:a","192k","-ar","48000","-max_muxing_queue_size","4096"]
+                    cmd2 += ["-map", "0:a"]
+
+                if cover and os.path.exists(cover) and not make_video:
+                    cov_abs = os.path.abspath(cover).replace("\\", "/")
+                    cmd2 += ["-i", cov_abs,
+                             "-map", "1:v",
+                             "-id3v2_version", "3",
+                             "-metadata:s:v", "title=Album cover",
+                             "-metadata:s:v", "comment=Cover (front)"]
+
+                cmd2 += ["-c:a", "libmp3lame", "-b:a", "192k", "-ar", "48000", "-max_muxing_queue_size", "4096"]
         
         if metadata:
             for k, v in (metadata or {}).items():

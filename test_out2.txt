@@ -1,0 +1,6 @@
+﻿[Ep 2570 - Tanish ka hmla] -> Rule 3 (keyword): 2570
+[Ep 885 - 9 Shaitano ka war] -> Rule 3 (keyword): 885
+[Ep 1126 - 8 Prachana ki mulakat] -> Rule 3 (keyword): 1126
+[Ep 1-10] -> Rule 2 (range): [1, 10]
+[Ep 15 to 300] -> Rule 2 (range): [15, 300]
+[Ep 2679 - Teer se samna] -> Rule 3 (keyword): 2679
