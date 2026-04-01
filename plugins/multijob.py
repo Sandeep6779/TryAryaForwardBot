@@ -461,10 +461,26 @@ async def _run_multijob(job_id: str, user_id: int, bot=None):
             batch_ids = list(range(current, batch_end + 1))
 
             # Fetch messages
+            # For userbot + DM/username source: get_messages() uses
+            # messages.GetMessages WITHOUT a peer → looks up IDs in global inbox
+            # (returns wrong messages from saved msgs or other chats).
+            # Always use get_chat_history for non-channel DM sources.
+            def _mj_is_dm(fc):
+                if isinstance(fc, int): return fc >= 0
+                return True  # @username / "me"
             try:
-                msgs = await client.get_messages(from_chat, batch_ids)
-                if not isinstance(msgs, list):
-                    msgs = [msgs]
+                if not is_bot and _mj_is_dm(from_chat):
+                    # get_chat_history paginates newest→oldest; reverse to get chronological
+                    batch_hist = []
+                    async for m in client.get_chat_history(from_chat, limit=BATCH_SIZE, offset_id=current):
+                        batch_hist.append(m)
+                    msgs = list(reversed(batch_hist))
+                    if not isinstance(msgs, list):
+                        msgs = [msgs]
+                else:
+                    msgs = await client.get_messages(from_chat, batch_ids)
+                    if not isinstance(msgs, list):
+                        msgs = [msgs]
             except FloodWait as fw:
                 await asyncio.sleep(fw.value + 2)
                 continue

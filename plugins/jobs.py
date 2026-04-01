@@ -444,9 +444,27 @@ async def _run_job(job_id: str, user_id: int):
                 chunk_end = min(batch_cursor + BATCH_CHUNK - 1, batch_end)
                 batch_ids = list(range(batch_cursor, chunk_end + 1))
 
+                # ── Fetch: for userbot + DM/username source, get_messages() uses
+                # messages.GetMessages WITHOUT a peer → fetches from global inbox
+                # (i.e. wrong chat). Always use get_chat_history for DM sources.
+                def _is_dm_source(fc):
+                    if isinstance(fc, int): return fc >= 0   # positive = DM/user
+                    return True  # string (@username, "me") = DM type
+
                 try:
-                    msgs = await client.get_messages(from_chat, batch_ids)
-                    if not isinstance(msgs, list): msgs = [msgs]
+                    if not is_bot and _is_dm_source(from_chat):
+                        # Userbot + DM/bot source → paginate via get_chat_history
+                        batch_msgs = []
+                        async for m in client.get_chat_history(from_chat, limit=BATCH_CHUNK, offset_id=batch_cursor):
+                            if m.id < (int(job.get('batch_start_id') or 1)):
+                                break
+                            batch_msgs.append(m)
+                        # get_chat_history returns newest→oldest; reverse to chronological
+                        msgs = list(reversed(batch_msgs))
+                        if not isinstance(msgs, list): msgs = [msgs]
+                    else:
+                        msgs = await client.get_messages(from_chat, batch_ids)
+                        if not isinstance(msgs, list): msgs = [msgs]
                 except FloodWait as fw:
                     await asyncio.sleep(fw.value + 2)
                     continue
@@ -587,21 +605,11 @@ async def _run_job(job_id: str, user_id: int):
 
             new_msgs: list = []
 
-            # Determine if this source supports get_chat_history.
-            # Only "me" (Saved Messages) and negative-ID chats (channels/supergroups)
-            # work correctly with get_chat_history on a userbot.
-            # @username and positive int IDs (Bot DMs) MUST use get_messages —
-            # using get_chat_history on them would fetch from the wrong peer entirely.
-            def _supports_history(fc):
-                if isinstance(fc, str) and fc.lower() in ("me", "saved"):
-                    return True
-                if isinstance(fc, int) and fc < 0:
-                    return True
-                return False
-
             try:
-                if not is_bot and _supports_history(from_chat):
-                    # Userbot + group/channel/saved messages → use fast history scroll
+                if not is_bot:
+                    # Userbot: use get_chat_history for ALL source types.
+                    # get_messages without a channel peer looks up IDs in global
+                    # inbox — returns wrong messages. get_chat_history is correct.
                     collected = []
                     async for msg in client.get_chat_history(from_chat, limit=50):
                         if msg.id <= last_seen:
