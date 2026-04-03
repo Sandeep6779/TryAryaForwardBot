@@ -571,16 +571,13 @@ async def _build_share_links(bot, user_id, sj, info_msg):
             _re.compile(r'(?i)\b(?:360|480|720|1080|2160|4k)[pi]\b'),
             # Codec/format labels
             _re.compile(r'(?i)\b(?:x264|x265|h\.?264|h\.?265|hevc|avc|aac|mp[34]|m4a|m4v|m4b|mkv|avi|mov|wmv|flv|flac|opus|ogg|wav|webm|3gp|mts|m2ts)\b'),
-            # Calendar years - REMOVED because episodes commonly pass through 1900-2099
-            # _re.compile(r'(?<!\d)(?:19[0-9]{2}|20[0-9]{2})(?!\d)'),
+            # Filename Date/Time Encampments (Blocks auto-generated device timestamps from being seen as Ep 2025)
+            _re.compile(r'(?i)(?:record|screenrecorder|vid|aud|voice|audio|img|pic|screenshot)[-_.0-9a-zA-Z]*\d{4}[-_.0-9]*'),
+            _re.compile(r'(?i)\b20\d{2}[-_. ]?\d{2}[-_. ]?\d{2}[-_.0-9]*'),
             # File sizes
             _re.compile(r'(?i)\b\d+(?:\.\d+)?\s*(?:mb|gb|kb)\b'),
             # Track/season-episode labels like S01E05
             _re.compile(r'(?i)\b(?:s[0-9]{1,2}e[0-9]{1,2})(?=\s|$)'),
-            # Trailing duplicate markers ONLY when preceded by a word character:
-            # " (1)" at END of string means duplicate copy — safe to strip.
-            # But "(12)" or "(56)" alone in the name should NOT be stripped.
-            # Removing entirely to prevent stripping legitimate episode tags like `Show(54).mp4`.
             # Common text noise
             _re.compile(r'(?i)\b(?:copy|final|v\d+|new|latest|audio|track)\b'),
         ]
