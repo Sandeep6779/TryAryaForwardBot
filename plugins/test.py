@@ -73,6 +73,10 @@ async def start_clone_bot(FwdBot, data=None):
             pyrogram.enums.ChatType.CHANNEL,
             pyrogram.enums.ChatType.SUPERGROUP,
         ]
+        
+        # Lock in numeric ID to prevent string resolution bugs later
+        if str(chat_id).lower() not in ("me", "saved"):
+            chat_id = chat.id
 
         BATCH_SIZE = 200  # Max IDs per get_messages call
 
@@ -125,7 +129,7 @@ async def start_clone_bot(FwdBot, data=None):
                 valid = []
                 for m in msgs:
                     if not m or m.empty: continue
-                    if getattr(m, 'chat', None) and m.chat.id != chat_id:
+                    if isinstance(chat_id, int) and getattr(m, 'chat', None) and m.chat.id != chat_id:
                         continue
                     valid.append(m)
                     
@@ -163,14 +167,8 @@ async def start_clone_bot(FwdBot, data=None):
                 valid = []
                 for m in msgs:
                     if not m or m.empty: continue
-                    if isinstance(chat_id, int):
-                        if getattr(m, 'chat', None) and m.chat.id != chat_id:
-                            continue
-                    elif isinstance(chat_id, str) and chat_id != "me":
-                        src = chat_id.replace("@", "").lower()
-                        c_id = getattr(m, 'chat', None)
-                        if c_id and str(c_id.id) != src and (not c_id.username or c_id.username.lower() != src):
-                            continue
+                    if isinstance(chat_id, int) and getattr(m, 'chat', None) and m.chat.id != chat_id:
+                        continue
                     valid.append(m)
                     
                 valid.sort(key=lambda m: m.id, reverse=True)
@@ -206,7 +204,7 @@ class CLIENT:
      if msg.text:
          asyncio.create_task(_schedule_delete(bot, user_id, msg.id, 43200))
          
-     if msg.text=='/cancel':
+     if getattr(msg, 'text', None) and any(x in msg.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
         return await msg.reply('<b>process cancelled !</b>')
      elif not msg.forward_date:
        return await msg.reply_text("<b>This is not a forward message</b>")
@@ -240,7 +238,7 @@ class CLIENT:
      if msg.text:
          asyncio.create_task(_schedule_delete(bot, user_id, msg.id, 43200))
          
-     if msg.text == '/cancel':
+     if getattr(msg, 'text', None) and any(x in msg.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
         return await msg.reply('<b>process cancelled !</b>')
      phone_number = msg.text.strip()
      import pyrogram
@@ -249,7 +247,7 @@ class CLIENT:
         await temp_client.connect()
         code = await temp_client.send_code(phone_number)
         otp_msg = await bot.ask(chat_id=user_id, text="<b>Send the OTP you received (e.g. 1 2 3 4 5 if code is 12345).\n\n/cancel - cancel the process</b>")
-        if otp_msg.text == '/cancel':
+        if getattr(otp_msg, 'text', None) and any(x in otp_msg.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
            await temp_client.disconnect()
            return await bot.send_message(user_id, '<b>process cancelled !</b>')
         
@@ -258,7 +256,7 @@ class CLIENT:
            await temp_client.sign_in(phone_number, code.phone_code_hash, otp)
         except pyrogram.errors.SessionPasswordNeeded:
            pwd_msg = await bot.ask(chat_id=user_id, text="<b>Your account has 2FA enabled. Send your password.\n\n/cancel - cancel the process</b>")
-           if pwd_msg.text == '/cancel':
+           if getattr(pwd_msg, 'text', None) and any(x in pwd_msg.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
               await temp_client.disconnect()
               return await bot.send_message(user_id, '<b>process cancelled !</b>')
            await temp_client.check_password(pwd_msg.text)

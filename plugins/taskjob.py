@@ -758,7 +758,7 @@ async def tj_info_cb(bot, query):
         text += f"\n<b>‣  Error:</b> <code>{job['error']}</code>"
 
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="tj#list")
+        InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="tj#list")
     ]]))
 
 
@@ -870,26 +870,40 @@ async def tj_del_cb(bot, query):
 # ══════════════════════════════════════════════════════════════════════════════
 
 async def _create_taskjob_flow(bot, user_id: int):
-    #  Step 1: Account 
+    CANCEL_BTN = KeyboardButton("⛔ Cᴀɴᴄᴇʟ")
+    UNDO_BTN   = KeyboardButton("↩️ Uɴᴅᴏ")
+
+    def _cancel(txt): return txt.strip().startswith("/cancel") or "⛔" in txt or "Cᴀɴᴄᴇʟ" in txt
+    def _undo(txt):   return txt.strip().startswith("/undo")   or "↩️" in txt or "Uɴᴅᴏ"   in txt
+
+    # ── Step 1: Account ───────────────────────────────────────────
     accounts = await db.get_bots(user_id)
     if not accounts:
         return await bot.send_message(user_id,
             "<b>❌ No accounts found. Add one in /settings → Accounts first.</b>")
 
-    acc_btns = [[KeyboardButton(
-        f"{'»  Bot' if a.get('is_bot', True) else '»  Userbot'}: "
-        f"{a.get('username') or a.get('name', 'Unknown')} [{a['id']}]"
-    )] for a in accounts]
-    acc_btns.append([KeyboardButton("/cancel")])
+    def _acc_label(a):
+        kind = "Bot" if a.get("is_bot", True) else "Userbot"
+        name = a.get("username") or a.get("name", "Unknown")
+        return f"{kind}: {name} [{a['id']}]"
+
+    acc_btns = [[KeyboardButton(_acc_label(a))] for a in accounts]
+    acc_btns.append([CANCEL_BTN])
 
     acc_r = await _ask(bot, user_id,
         "<b>»  Create Task Job — Step 1/4</b>\n\n"
-        "Choose the account to use for this task:\n"
-        "<i>(Userbot required for private/restricted channels)</i>",
+        "Choose the <b>account</b> to use for this task:\n\n"
+        "<blockquote expandable>"
+        "🤖 <b>Bot</b> — works for public channels where the bot is admin.\n"
+        "👤 <b>Userbot</b> — required for:\n"
+        "  • Private/restricted channels\n"
+        "  • Forwarding without forward tags\n"
+        "  • Groups where bots cannot read history"
+        "</blockquote>",
         reply_markup=ReplyKeyboardMarkup(acc_btns, resize_keyboard=True, one_time_keyboard=True))
 
-    if "/cancel" in acc_r.text:
-        return await acc_r.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+    if _cancel(acc_r.text):
+        return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
 
     acc_id = None
     if "[" in acc_r.text and "]" in acc_r.text:
@@ -898,22 +912,42 @@ async def _create_taskjob_flow(bot, user_id: int):
     sel_acc = (await db.get_bot(user_id, acc_id)) if acc_id else accounts[0]
     is_bot  = sel_acc.get("is_bot", True)
 
-    #  Step 2: Source Chat 
-    src_r = await _ask(bot, user_id,
-        "<b>Step 2/4 — Source Channel</b>\n\n"
-        "Send the source channel:\n"
-        "• <code>@username</code>\n"
-        "• Channel link (e.g. <code>https://t.me/c/12345/1</code>)\n"
-        "• Numeric ID (e.g. <code>-1001234567890</code>)\n\n"
-        "<i>This is the private channel you want to copy FROM.</i>",
-        reply_markup=ReplyKeyboardRemove())
+    # ── Step 2: Source Chat ───────────────────────────────────────
+    while True:
+        src_r = await _ask(bot, user_id,
+            "<b>Step 2/4 — Source Channel</b>\n\n"
+            "Send the <b>source channel or group</b> to copy files from.\n\n"
+            "<blockquote expandable>"
+            "Accepted formats:\n"
+            "• <code>@username</code> — public channel/group username\n"
+            "• <code>https://t.me/username</code> — public link\n"
+            "• <code>https://t.me/c/1234567890/1</code> — private channel link\n"
+            "• <code>-1001234567890</code> — numeric chat ID (negative for channels/groups)\n\n"
+            "📌 Private channel: use a Userbot that is already a member.\n"
+            "📌 Public channel: Bot account works if it can read messages.\n"
+            "📌 This is the channel you want to copy FROM — not the destination."
+            "</blockquote>",
+            reply_markup=ReplyKeyboardMarkup([[UNDO_BTN, CANCEL_BTN]], resize_keyboard=True, one_time_keyboard=True))
 
-    if src_r.text.strip().startswith("/cancel"):
-        return await src_r.reply("<b>Cancelled.</b>")
+        if _cancel(src_r.text):
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+        if _undo(src_r.text):
+            # redo account selection
+            acc_r2 = await _ask(bot, user_id,
+                "<b>↩️ Redo — Step 1/4: Account</b>\n\nChoose the account again:",
+                reply_markup=ReplyKeyboardMarkup(acc_btns, resize_keyboard=True, one_time_keyboard=True))
+            if _cancel(acc_r2.text):
+                return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+            if "[" in acc_r2.text and "]" in acc_r2.text:
+                try: acc_id = int(acc_r2.text.split('[')[-1].split(']')[0])
+                except Exception: pass
+            sel_acc = (await db.get_bot(user_id, acc_id)) if acc_id else accounts[0]
+            is_bot  = sel_acc.get("is_bot", True)
+            continue
+        break
 
     from_chat_raw = src_r.text.strip()
 
-    # Parse a message link to extract chat_id
     link_match = re.search(r't\.me/c/(\d+)', from_chat_raw)
     if link_match:
         from_chat = int(f"-100{link_match.group(1)}")
@@ -928,20 +962,49 @@ async def _create_taskjob_flow(bot, user_id: int):
     except Exception:
         from_title = str(from_chat)
 
-    #  Step 3: Start ID and End ID 
-    range_r = await _ask(bot, user_id,
-        "<b>Step 3/4 — Message Range</b>\n\n"
-        "Choose how many messages to copy:\n\n"
-        "• Send <b>ALL</b> to copy all messages from the beginning\n"
-        "• Send a <b>start message ID</b> (e.g. <code>100</code>) to begin from that point\n"
-        "• Send <b>start_id:end_id</b> (e.g. <code>100:500</code>) to copy a specific range\n\n"
-        "<i>The job will run continuously until all messages in the range are copied.</i>")
+    # ── Step 3: Message Range ──────────────────────────────────────
+    while True:
+        range_r = await _ask(bot, user_id,
+            "<b>Step 3/4 — Message Range</b>\n\n"
+            "Choose which messages to copy:\n\n"
+            "<blockquote expandable>"
+            "• <b>ALL</b> — copy from message ID 1 (very beginning)\n"
+            "• <code>100</code> — start from message ID 100 onward\n"
+            "• <code>100:500</code> — copy only message IDs 100 through 500\n\n"
+            "The job runs until all messages in the range are copied.\n"
+            "You can pause and resume it from the Task Jobs menu."
+            "</blockquote>",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("ALL")], [UNDO_BTN, CANCEL_BTN]],
+                resize_keyboard=True, one_time_keyboard=True))
 
-    if "/cancel" in range_r.text:
-        return await range_r.reply("<b>Cancelled.</b>")
+        if _cancel(range_r.text):
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+        if _undo(range_r.text):
+            # redo source chat
+            src_r2 = await _ask(bot, user_id,
+                "<b>↩️ Redo — Step 2/4: Source Channel</b>\n\nSend source channel again:",
+                reply_markup=ReplyKeyboardMarkup([[CANCEL_BTN]], resize_keyboard=True, one_time_keyboard=True))
+            if _cancel(src_r2.text):
+                return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+            from_chat_raw = src_r2.text.strip()
+            lm = re.search(r't\.me/c/(\d+)', from_chat_raw)
+            if lm:
+                from_chat = int(f"-100{lm.group(1)}")
+            elif from_chat_raw.lstrip('-').isdigit():
+                from_chat = int(from_chat_raw)
+            else:
+                from_chat = from_chat_raw
+            try:
+                co2 = await bot.get_chat(from_chat)
+                from_title = getattr(co2, "title", None) or str(from_chat)
+            except Exception:
+                from_title = str(from_chat)
+            continue
+        break
 
     start_id = 1
-    end_id   = 0  # 0 = no limit
+    end_id   = 0
     rtext = range_r.text.strip().lower()
 
     if rtext != "all":
@@ -955,7 +1018,7 @@ async def _create_taskjob_flow(bot, user_id: int):
             try: start_id = int(rtext)
             except Exception: pass
 
-    #  Step 4: Destination 
+    # ── Step 4: Destination ───────────────────────────────────────
     channels = await db.get_user_channels(user_id)
     if not channels:
         return await bot.send_message(user_id,
@@ -963,14 +1026,41 @@ async def _create_taskjob_flow(bot, user_id: int):
             reply_markup=ReplyKeyboardRemove())
 
     ch_btns = [[KeyboardButton(ch['title'])] for ch in channels]
-    ch_btns.append([KeyboardButton("/cancel")])
+    ch_btns.append([UNDO_BTN, CANCEL_BTN])
 
-    ch_r = await _ask(bot, user_id,
-        "<b>Step 4/4 — Target Channel</b>\n\nChoose where to forward messages:",
-        reply_markup=ReplyKeyboardMarkup(ch_btns, resize_keyboard=True, one_time_keyboard=True))
+    while True:
+        ch_r = await _ask(bot, user_id,
+            "<b>Step 4/4 — Target Channel</b>\n\nChoose where to forward messages:\n\n"
+            "<blockquote expandable>"
+            "Choose from your saved channels/groups.\n"
+            "To add a channel, go to /settings → Channels.\n"
+            "The selected account must be an admin with send permissions."
+            "</blockquote>",
+            reply_markup=ReplyKeyboardMarkup(ch_btns, resize_keyboard=True, one_time_keyboard=True))
 
-    if "/cancel" in ch_r.text:
-        return await ch_r.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+        if _cancel(ch_r.text):
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+        if _undo(ch_r.text):
+            # redo message range
+            range_r2 = await _ask(bot, user_id,
+                "<b>↩️ Redo — Step 3/4: Message Range</b>\n\nSend range again (ALL / ID / start:end):",
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("ALL")], [CANCEL_BTN]], resize_keyboard=True, one_time_keyboard=True))
+            if _cancel(range_r2.text):
+                return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+            rtext2 = range_r2.text.strip().lower()
+            start_id, end_id = 1, 0
+            if rtext2 != "all":
+                if ":" in rtext2:
+                    p2 = rtext2.split(":", 1)
+                    try: start_id = int(p2[0].strip())
+                    except Exception: pass
+                    try: end_id   = int(p2[1].strip())
+                    except Exception: pass
+                else:
+                    try: start_id = int(rtext2)
+                    except Exception: pass
+            continue
+        break
 
     to_chat, to_title = None, ch_r.text.strip()
     for ch in channels:
@@ -983,7 +1073,7 @@ async def _create_taskjob_flow(bot, user_id: int):
         return await bot.send_message(user_id, "<b>Invalid selection. Cancelled.</b>",
                                       reply_markup=ReplyKeyboardRemove())
 
-    #  Save & Start 
+    # ── Save & Start ──────────────────────────────────────────────
     job_id = f"tj-{user_id}-{int(time.time())}"
     job = {
         "job_id":      job_id,
@@ -1006,11 +1096,12 @@ async def _create_taskjob_flow(bot, user_id: int):
     _start_task(job_id, user_id)
 
     end_lbl = f"up to ID <code>{end_id}</code>" if end_id else "all messages"
+    kind    = "Bot" if is_bot else "Userbot"
     await bot.send_message(
         user_id,
         f"<b>✅ Task Job Created & Started!</b>\n\n"
         f"🟢 Copying <b>{from_title}</b> → <b>{to_title}</b>\n"
-        f"<b>Account:</b> {'»  Bot' if is_bot else '»  Userbot'}: {sel_acc.get('name','?')}\n"
+        f"<b>Account:</b> {kind}: {sel_acc.get('name','?')}\n"
         f"<b>Range:</b> From ID <code>{start_id}</code> · {end_lbl}\n"
         f"<b>Job ID:</b> <code>{job_id[-6:]}</code>\n\n"
         f"<i>Running in the background.\n"

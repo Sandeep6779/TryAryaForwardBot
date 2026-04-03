@@ -27,43 +27,19 @@ _S = {}   # populated below; we use a plain dict for clarity
 #  START_TXT 
 _S["START_TXT"] = {
     "en": (
-        "<b>  𝐀𝐮𝐭𝐨 𝐅𝐨𝐫𝐰𝐚𝐫𝐝𝐞𝐫  \n"
+        "<i>Hello </i><a href='tg://user?id={}'>{}</a>\n"
         "\n"
-        "  𝐇𝐞𝐥𝐥𝐨 {}\n"
-        "\n"
-        "  »  ᴀʀʏᴀ ʙᴏᴛ [ ᴩᴏᴡᴇʀғᴜʟ ꜰᴏʀᴡᴀʀᴅ ᴛᴏᴏʟ ]\n"
-        "\n"
-        "  <i>ɪ ᴄᴀɴ ғᴏʀᴡᴀʀᴅ ᴀʟʟ ᴍᴇꜱꜱᴀɢᴇꜱ ғʀᴏᴍ ᴏɴᴇ\n"
-        "  ᴄʜᴀɴɴᴇʟ ᴛᴏ ᴀɴᴏᴛʜᴇʀ ᴄʜᴀɴɴᴇʟ ᴡɪᴛʜ\n"
-        "  ᴍᴏʀᴇ ғᴇᴀᴛᴜʀᴇꜱ.</i>\n"
-        "\n"
-        "</b>"
+        "<i>I am </i>ᴀʀʏᴀ ʙᴏᴛ<i>, a multi-functional bot that </i>ᴄᴀɴ ғᴏʀᴡᴀʀᴅ<i> messages across channels and groups. I fully support normal forwarding, multi-job batches, live syncing, the media merger system (video & audio), batch link generation, and bulk message cleaning.</i>\n"
     ),
     "hi": (
-        "<b>  𝐀𝐮𝐭𝐨 𝐅𝐨𝐫𝐰𝐚𝐫𝐝𝐞𝐫  \n"
+        "<i>Hello </i><a href='tg://user?id={}'>{}</a>\n"
         "\n"
-        "  𝐇𝐞𝐥𝐥𝐨 {}\n"
-        "\n"
-        "  »  Aryᴀ Bᴏᴛ [ ᴩᴏwᴇʀғᴜʟ Fᴏʀᴡᴀʀᴅ Tᴏᴏʟ ]\n"
-        "\n"
-        "  <i>मैं एक चैनल से दूसरे चैनल में सभी संदेश\n"
-        "  फॉरवर्ड कर सकता हूँ - कई एडवांस\n"
-        "  फीचर्स के साथ।</i>\n"
-        "\n"
-        "</b>"
+        "<i>I am </i>ᴀʀʏᴀ ʙᴏᴛ<i>, a multi-functional bot that </i>ᴄᴀɴ ғᴏʀᴡᴀʀᴅ<i> messages across channels and groups. I fully support normal forwarding, multi-job batches, live syncing, the media merger system (video & audio), batch link generation, and bulk message cleaning.</i>\n"
     ),
     "hinglish": (
-        "<b>  𝐀𝐮𝐭𝐨 𝐅𝐨𝐫𝐰𝐚𝐫𝐝𝐞𝐫  \n"
+        "<i>Hello </i><a href='tg://user?id={}'>{}</a>\n"
         "\n"
-        "  𝐇𝐞𝐥𝐥𝐨 {}\n"
-        "\n"
-        "  »  Aryᴀ Bᴏᴛ [ ᴩᴏwᴇʀғᴜʟ Fᴏʀᴡᴀʀᴅ Tᴏᴏʟ ]\n"
-        "\n"
-        "  <i>Main ek channel se doosre channel mein\n"
-        "  sab messages forward kar sakta hoon -\n"
-        "  bahut saare features ke saath.</i>\n"
-        "\n"
-        "</b>"
+        "<i>I am </i>ᴀʀʏᴀ ʙᴏᴛ<i>, a multi-functional bot that </i>ᴄᴀɴ ғᴏʀᴡᴀʀᴅ<i> messages across channels and groups. I fully support normal forwarding, multi-job batches, live syncing, the media merger system (video & audio), batch link generation, and bulk message cleaning.</i>\n"
     ),
 }
 
@@ -513,15 +489,15 @@ _S["DUPLICATE_TEXT"] = {
 }
 
 #  Simple one-liners 
-_S["cancelled"] = {
+_S["<i>Process Cancelled Successfully!</i>"] = {
     "en": "»  Process cancelled.",
     "hi": "»  प्रक्रिया रद्द की गई।",
     "hinglish": "»  Process cancel ho gaya.",
 }
-_S["btn_settings"] = {"en": "⚙️  Settings", "hi": "⚙️  सेटिंग्स", "hinglish": "⚙️  Settings"}
-_S["btn_jobs"] = {"en": "📋  Live Jobs", "hi": "📋  लाइव जॉब्स", "hinglish": "📋  Live Jobs"}
-_S["btn_help"] = {"en": "🙋  Help", "hi": "🙋  संसथान", "hinglish": "🙋  Help"}
-_S["btn_about"] = {"en": "💁  About", "hi": "💁  बारे में", "hinglish": "💁  About"}
+_S["btn_settings"] = {"en": "⚙️ Sᴇᴛᴛɪɴɢs", "hi": "⚙️ Sᴇᴛᴛɪɴɢs", "hinglish": "⚙️ Sᴇᴛᴛɪɴɢs"}
+_S["btn_jobs"] = {"en": "📋 Lɪᴠᴇ Jᴏʙs", "hi": "📋 Lɪᴠᴇ Jᴏʙs", "hinglish": "📋 Lɪᴠᴇ Jᴏʙs"}
+_S["btn_help"] = {"en": "🙋 Hᴇʟᴘ", "hi": "🙋 Hᴇʟᴘ", "hinglish": "🙋 Hᴇʟᴘ"}
+_S["btn_about"] = {"en": "💁 Aʙᴏᴜᴛ", "hi": "💁 Aʙᴏᴜᴛ", "hinglish": "💁 Aʙᴏᴜᴛ"}
 _S["btn_close"] = {"en": "‣  Close", "hi": "‣  बंद करें", "hinglish": "‣  Close"}
 _S["settings_title"] = {
     "en": "»  Change your settings as you wish:",
@@ -603,7 +579,7 @@ def _lang_keyboard(current_lang: str) -> InlineKeyboardMarkup:
             InlineKeyboardButton(f"{mark('hinglish')}»  Hinglish", callback_data="setlang#hinglish"),
         ],
         [
-            InlineKeyboardButton("«  Back to Settings",             callback_data="settings#main"),
+            InlineKeyboardButton("Bᴀᴄᴋ Tᴏ Sᴇᴛᴛɪɴɢs",             callback_data="settings#main"),
         ]
     ])
 

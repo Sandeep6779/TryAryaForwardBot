@@ -282,7 +282,7 @@ async def _scan_flow(bot, user_id: int):
             reply_markup=markup
         )
         if not msg or "Cancel" in (msg.text or ""):
-            return await bot.send_message(user_id, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
 
         title = (msg.text or "").replace("📢 ", "").strip()
         ch = next((c for c in chans if c["title"] == title), None)
@@ -290,7 +290,7 @@ async def _scan_flow(bot, user_id: int):
             return await bot.send_message(user_id, "<b>❌ Channel not found.</b>", reply_markup=ReplyKeyboardRemove())
 
         chat_id = int(ch['chat_id'])
-        markup2 = ReplyKeyboardMarkup([["/cancel"]], resize_keyboard=True, one_time_keyboard=True)
+        markup2 = ReplyKeyboardMarkup([["⛔ Cᴀɴᴄᴇʟ"]], resize_keyboard=True, one_time_keyboard=True)
 
         # Check if existing index
         existing = await db.get_channel_index(chat_id)
@@ -315,7 +315,7 @@ async def _scan_flow(bot, user_id: int):
             choice = (opt_msg.text or "").strip()
 
             if "Cancel" in choice:
-                return await bot.send_message(user_id, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+                return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
 
             if "Download" in choice:
                 # Re-generate and send existing report
@@ -350,8 +350,8 @@ async def _scan_flow(bot, user_id: int):
                     "Send the <b>latest message ID or link</b> to scan up to:",
                     reply_markup=markup2
                 )
-                if (msg_end.text or "") == "/cancel":
-                    return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
+                if getattr(msg_end, 'text', None) and any(x in msg_end.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
+                    return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
                 try:
                     end_id = _parse_msg_id(msg_end)
                 except ValueError as ve:
@@ -392,8 +392,8 @@ async def _scan_flow(bot, user_id: int):
             "<b>❪ STEP 2: START ❫</b>\n\nForward the <b>first message</b> or send its ID/link:",
             reply_markup=markup2
         )
-        if (msg_start.text or "") == "/cancel":
-            return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
+        if getattr(msg_start, 'text', None) and any(x in msg_start.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
         try:
             start_id = _parse_msg_id(msg_start)
         except ValueError as ve:
@@ -404,8 +404,8 @@ async def _scan_flow(bot, user_id: int):
             "<b>❪ STEP 3: END ❫</b>\n\nForward the <b>last message</b> or send its ID/link:",
             reply_markup=markup2
         )
-        if (msg_end.text or "") == "/cancel":
-            return await bot.send_message(user_id, "Cancelled.", reply_markup=ReplyKeyboardRemove())
+        if getattr(msg_end, 'text', None) and any(x in msg_end.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
         try:
             end_id = _parse_msg_id(msg_end)
         except ValueError as ve:

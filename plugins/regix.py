@@ -705,7 +705,7 @@ async def edit(msg, title, status, sts):
    else:
        text = TEXT_BATCH.format(i.fetched, i.total_files, i.duplicate, i.skip, i.deleted, status, estimated_total_time)
    
-   if status in ["cancelled", "completed"]:
+   if status in ["<i>Process Cancelled Successfully!</i>", "completed"]:
       # Completed state button override with Support text
       button = [[
           InlineKeyboardButton('💬 Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ', url='https://t.me/+1p2hcQ4ZaupjNjI1'),
@@ -728,7 +728,7 @@ async def edit(msg, title, status, sts):
 async def is_cancelled(client, user, msg, sts):
    if temp.CANCEL.get(user)==True:
       temp.IS_FRWD_CHAT.remove(sts.TO)
-      await edit(msg, "Cancelled", "completed", sts)
+      await edit(msg, "<i>Process Cancelled Successfully!</i>", "completed", sts)
       await send(client, user, "<b>❌ Forwarding Process Cancelled</b>")
       # Mark channel progress as cancelled
       try:
@@ -780,7 +780,7 @@ def _build_channel_progress_text(forwarded: int, total: int, status: str = "forw
             f"➤ ᴀʟʟ <u>{forwarded}</u> ꜰɪʟᴇꜱ ʜᴀᴠᴇ ʙᴇᴇɴ ᴍᴏᴠᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!\n\n"
             f"<i>ᴘᴏᴡᴇʀᴇᴅ ʙʏ ᴀʀʏᴀ ꜰᴏʀᴡᴀʀᴅ ʙᴏᴛ</i>"
         )
-    elif status == "cancelled":
+    elif status == "<i>Process Cancelled Successfully!</i>":
         return (
             f"➤ <b>⏹ ꜰᴏʀᴡᴀʀᴅɪɴɢ ᴄᴀɴᴄᴇʟʟᴇᴅ</b>\n"
             f"➤ <b>ᴀᴄᴄᴏᴜɴᴛ:</b> <code>System</code>\n\n"
@@ -829,7 +829,7 @@ async def channel_progress_done(client, dest_chat: int, forwarded: int, total: i
                                   cancelled: bool = False, auto_delete_secs: int = 180) -> None:
     """Edit the progress message to show completion, unpin it, delete it, then send completion message."""
     msg_id = _channel_progress_msgs.pop(dest_chat, None)
-    status = "cancelled" if cancelled else "done"
+    status = "<i>Process Cancelled Successfully!</i>" if cancelled else "done"
 
     if msg_id:
         try:
@@ -1002,7 +1002,7 @@ async def status_msg(bot, msg):
        return await msg.answer(PROGRESS_LIVE.format(percentage, fetched, forwarded, remaining, status), show_alert=True)
     else:
        est_time = TimeFormatter(milliseconds=est_time)
-       est_time = est_time if (est_time != '' or status not in ['completed', 'cancelled']) else '0 s'
+       est_time = est_time if (est_time != '' or status not in ['completed', '<i>Process Cancelled Successfully!</i>']) else '0 s'
        return await msg.answer(PROGRESS_BATCH.format(percentage, fetched, forwarded, remaining, status, est_time), show_alert=True)
                   
 @Client.on_callback_query(filters.regex(r'^close_btn$'))

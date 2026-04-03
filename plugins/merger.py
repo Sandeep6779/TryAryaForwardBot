@@ -159,11 +159,35 @@ def _build_info_text(job: dict, now_ts: Optional[float] = None) -> str:
     else:
         live_elapsed = 0
 
-    # ── ETAs from DB ───────────────────────────────────────────────────────
-    dl_eta  = job.get("dl_eta",  0) or 0
-    mg_eta  = job.get("mg_eta",  0) or 0
-    up_eta  = job.get("up_eta",  0) or 0
-    yt_eta  = job.get("yt_eta",  0) or 0
+    # ── Calculate dynamic ETAs ─────────────────────────────────────────────
+    # Fetch base ETAs from DB if present
+    dl_eta_db  = job.get("dl_eta",  0) or 0
+    mg_eta_db  = job.get("mg_eta",  0) or 0
+    up_eta_db  = job.get("up_eta",  0) or 0
+    yt_eta_db  = job.get("yt_eta",  0) or 0
+
+    # Project live ETA based on elapsed time if available and meaningful
+    dl_eta = dl_eta_db
+    if status == "downloading" and dl_done > 0 and live_elapsed > 5:
+        speed_per_file = live_elapsed / dl_done
+        dl_eta = speed_per_file * (total_files - dl_done)
+
+    # Hardcoded or projected ETAs for merging if unavailable
+    mg_eta = mg_eta_db
+    if status == "merging" and live_elapsed > 0:
+        # Rough estimate based on file count
+        total_mg_eta = total_files * 3.5  # About 3.5s per file avg merge processing
+        mg_eta = max(total_mg_eta - live_elapsed, 10)
+    elif mg_eta == 0 and status in ("downloading", "queued"):
+        mg_eta = total_files * 3.5
+
+    up_eta = up_eta_db
+    if up_eta == 0 and status in ("downloading", "merging", "queued"):
+        up_eta = total_files * 1.5 # rough estimate
+
+    yt_eta = yt_eta_db
+    if yt_eta == 0 and job.get("upload_to_yt") and status in ("downloading", "merging", "uploading"):
+        yt_eta = total_files * 2.0
 
     # ── Overall percentage ─────────────────────────────────────────────────
     # Weight phases: DL=40%, Merge=20%, TG Upload=25%, YT Upload=15%
@@ -370,7 +394,7 @@ def _build_atempo_chain(speed):
         filters.append(f"atempo={rem:.4f}")
     return ",".join(filters) if filters else ""
 
-async def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=None, speed=1.0, make_video=False, video_cover=None, outro_cover=None, total_duration=None, progress_cb=None):
+async def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", cover=None, speed=1.0, make_video=False, video_cover=None, outro_cover=None, total_duration=None, progress_cb=None, is_chunk=False):
     """Merge file_list → output_path. Tries lossless copy first, falls back to re-encode.
     make_video: If True and cover is present, creates an MP4 video out of the merged audio and cover image.
     speed: 1.0 = normal, 2.5 = 2.5x faster.
@@ -447,7 +471,7 @@ async def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", co
         # Audio concatenation with different formats (mp3 + m4a) must be re-encoded to prevent truncation.
         # We enforce re-encode if it's an audio merge with multiple files, or if make_video is True.
         # Video merges (mtype == "video") with make_video == False can safely use lossless concat demuxer.
-        needs_reencode = bool(atempo) or make_video or (mtype == "audio" and len(file_list) > 1)
+        needs_reencode = bool(atempo) or make_video or (mtype == "audio" and len(file_list) > 1 and is_chunk)
 
 
         if not needs_reencode:
@@ -473,175 +497,165 @@ async def _ffmpeg_merge(file_list, output_path, metadata=None, mtype="audio", co
             ok, err = await _run_cmd(cmd, 7200)
             if ok and os.path.exists(abs_out) and os.path.getsize(abs_out) > 1000:
                 return True, ""
-        # Re-encode path
-        cmd2 = ["ffmpeg","-y","-threads","2"]
-        eff_cover = video_cover or cover  # use video_cover if available
+
+        # ══════════════════════════════════════════════════════════════════════
+        # Re-encode path — TWO-STEP for video (RAM-safe), filter_complex for audio chunks
+        # ══════════════════════════════════════════════════════════════════════
+        eff_cover = video_cover or cover
+
         if make_video and eff_cover and os.path.exists(eff_cover) and mtype == "audio":
-            if outro_cover and len([o for o in (outro_cover if isinstance(outro_cover, list) else [outro_cover]*4) if isinstance(o, str) and os.path.exists(o)]) == 4:
-                outros = outro_cover if isinstance(outro_cover, list) else [outro_cover] * 4
-                valid_outros = [o for o in outros if isinstance(o, str) and os.path.exists(o)]
+            # ─── Step A: Merge audio parts → single tmp_audio.m4a ──────────────
+            # Use concat DEMUXER (not filter_complex) — streams files sequentially,
+            # O(1) RAM regardless of how many parts there are. Parts are uniform
+            # mp3/192k from Phase 2 so concat demuxer works perfectly.
+            tmp_audio = output_path + ".tmp_audio.m4a"
+            audio_join_cmd = ["ffmpeg", "-y", "-threads", "2",
+                              "-f", "concat", "-safe", "0", "-i", lst, "-vn"]
+            if atempo:
+                audio_join_cmd += ["-af", atempo]
+            audio_join_cmd += ["-c:a", "aac", "-b:a", "192k", tmp_audio]
+            a_ok, a_err = await _run_cmd(audio_join_cmd, 86400)
+            if not a_ok or not os.path.exists(tmp_audio) or os.path.getsize(tmp_audio) < 1000:
+                try:
+                    if os.path.exists(tmp_audio): os.remove(tmp_audio)
+                except Exception: pass
+                return False, f"Audio merge step A failed: {a_err}"
 
-                # ══ Step 1: Merge audio only to get the EXACT real duration ══
-                tmp_audio = output_path + ".tmp_audio.m4a"
-                audio_cmd = ["ffmpeg","-y","-threads","2"]
-                for p in file_list: audio_cmd += ["-i", os.path.abspath(p)]
-                fc = "".join(f"[{i}:a]" for i in range(len(file_list))) + f"concat=n={len(file_list)}:v=0:a=1[a1]"
-                if atempo: fc += f";[a1]{atempo}[a2]"
-                map_lbl = "[a2]" if atempo else "[a1]"
-                audio_cmd += ["-filter_complex", fc, "-map", map_lbl, "-vn","-c:a","aac","-b:a","192k", tmp_audio]
-                a_ok, a_err = await _run_cmd(audio_cmd, 7200)
-                if not a_ok or not os.path.exists(tmp_audio):
-                    return False, "Audio merge failed: " + a_err
+            real_dur = _get_duration(tmp_audio)
+            if real_dur <= 0:
+                real_dur = total_duration / max(speed, 0.1) if total_duration else 3600 * 5
 
-                real_dur = _get_duration(tmp_audio)
-                if real_dur <= 0:
-                    real_dur = total_duration / max(speed, 0.1) if total_duration else 3600 * 5
+            # ─── Step B: Build video from cover + single audio ──────────────────
+            # Determine valid outros
+            if isinstance(outro_cover, list):
+                valid_outros = [o for o in outro_cover if isinstance(o, str) and os.path.exists(o)]
+            elif isinstance(outro_cover, str) and os.path.exists(outro_cover):
+                valid_outros = [outro_cover]
+            else:
+                valid_outros = []
 
-                # ══ Step 2: Evenly space 4 outros across the audio duration ══
-                # Each outro is 5 seconds; place them at 25%, 50%, 75%, and 95% marks
+            cmd_v = ["ffmpeg", "-y", "-threads", "2"]
+
+            if valid_outros and len(valid_outros) >= 4:
+                # 4-outro overlay mode: cover (input 0) + 4 outro images (inputs 1-4) + audio (input 5)
                 outro_positions = [
                     max(0.0, real_dur * 0.25),
                     max(0.0, real_dur * 0.50),
                     max(0.0, real_dur * 0.75),
                     max(0.0, real_dur * 0.95 - 5),
                 ]
+                cmd_v += ["-loop", "1", "-framerate", "1", "-t", f"{real_dur:.2f}",
+                           "-i", os.path.abspath(eff_cover)]
+                for op in valid_outros[:4]:
+                    cmd_v += ["-loop", "1", "-framerate", "1", "-t", "5",
+                               "-i", os.path.abspath(op)]
+                cmd_v += ["-i", tmp_audio]
+                audio_idx = 5
 
-                # ══ Step 3: Build overlay filter chain ══
-                # Base: loop cover image for real_dur seconds at 1 fps
-                # Then overlay each outro with 'enable' timing
-                # [0:v] = looped cover  [1:v]..[4:v] = 4 outro images
-                filter_parts = []
-                prev_label = "[0:v]"
-                for i, (outro_path, pos) in enumerate(zip(valid_outros, outro_positions)):
-                    end_t = pos + 5.0
-                    out_label = f"[v{i}]" if i < 3 else "[vout]"
-                    # Scale outro to same 1280x720
-                    filter_parts.append(
-                        f"[{i+1}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
-                        f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p[outro{i}];"
-                        f"{prev_label}[outro{i}]overlay=0:0:enable='between(t,{pos:.1f},{end_t:.1f})'{out_label}"
-                    )
-                    prev_label = out_label
-
-                vf_complex = "; ".join(filter_parts)
-                # Main cover scale must match
-                cover_scale = f"[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p[0:v]"
-
-                # Build full filter_complex
-                full_filter = f"{vf_complex}"
-
-                # Build input list: cover + 4 outro images + audio
-                cmd2 = ["ffmpeg","-y"]
-                cmd2 += ["-loop","1","-framerate","1","-t",str(real_dur),"-i", os.path.abspath(eff_cover)]
-                for op in valid_outros:
-                    cmd2 += ["-loop","1","-framerate","1","-t","5","-i", os.path.abspath(op)]
-                cmd2 += ["-i", tmp_audio]
-
-                # Filter: scale cover, then overlay outros
-                n_outros = len(valid_outros)  # 4
-                audio_input_idx = n_outros + 1
-                # Simple filter_complex: scale cover, then overlay each outro
-                fc_parts = []
-                # Scale the cover first
-                fc_parts.append(
+                # filter_complex: scale cover → overlay each outro sequentially
+                fc_parts = [
                     f"[0:v]scale=1280:720:force_original_aspect_ratio=decrease,"
                     f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p[base]"
-                )
+                ]
                 prev = "[base]"
                 for i, pos in enumerate(outro_positions):
                     end_t = pos + 5.0
-                    out_lbl = f"[ov{i}]" if i < n_outros - 1 else "[finalv]"
+                    out_lbl = f"[ov{i}]" if i < 3 else "[finalv]"
                     fc_parts.append(
                         f"[{i+1}:v]scale=1280:720:force_original_aspect_ratio=decrease,"
                         f"pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p[os{i}];"
                         f"{prev}[os{i}]overlay=0:0:enable='between(t,{pos:.1f},{end_t:.1f})'{out_lbl}"
                     )
                     prev = out_lbl
-
-                cmd2 += ["-filter_complex", ";".join(fc_parts)]
-                cmd2 += ["-map", "[finalv]", "-map", f"{audio_input_idx}:a"]
-                cmd2 += [
-                    "-c:v","libx264","-preset","superfast","-tune","stillimage",
-                    "-c:a","aac","-b:a","192k",
-                    "-movflags","+faststart",
-                    "-max_muxing_queue_size","4096"
+                cmd_v += ["-filter_complex", ";".join(fc_parts)]
+                cmd_v += ["-map", "[finalv]", "-map", f"{audio_idx}:a"]
+            else:
+                # Simple mode: cover image + merged audio (no outros, only 2 inputs)
+                cmd_v += ["-loop", "1", "-framerate", "1", "-i", os.path.abspath(eff_cover)]
+                cmd_v += ["-i", tmp_audio]
+                cmd_v += [
+                    "-filter_complex",
+                    "[0:v]scale=1280:720:force_original_aspect_ratio=decrease,"
+                    "pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v1]",
                 ]
-                if metadata:
-                    for k, v in (metadata or {}).items():
-                        if v: cmd2 += ["-metadata", f"{k}={v}"]
-                abs_output = os.path.abspath(output_path)
-                cmd2.append(abs_output)
-                v_ok, v_err = await _run_cmd(cmd2, 86400)
-                try:
-                    if os.path.exists(tmp_audio): os.remove(tmp_audio)
-                except Exception: pass
-                if v_ok and os.path.exists(abs_output) and os.path.getsize(abs_output) > 100:
-                    return True, ""
-                else:
-                    return False, v_err
-            else:
-                cmd2 += ["-loop", "1", "-framerate", "1", "-i", os.path.abspath(eff_cover)]
-        else:
-            cmd2 += ["-loop", "1", "-framerate", "1", "-i", os.path.abspath(eff_cover)] if (make_video and eff_cover and os.path.exists(eff_cover) and mtype == "audio") else []
+                cmd_v += ["-map", "[v1]", "-map", "1:a"]
 
-        if make_video and eff_cover and os.path.exists(eff_cover) and mtype == "audio" and not outro_cover:
-            for p in file_list: cmd2 += ["-i", os.path.abspath(p)]
-            fc = "".join(f"[{i+1}:a]" for i in range(len(file_list))) + f"concat=n={len(file_list)}:v=0:a=1[a1]"
-            if atempo: fc += f";[a1]{atempo}[a2]"
-            map_albl = "[a2]" if atempo else "[a1]"
-            fc += ";[0:v]scale=1280:720:force_original_aspect_ratio=decrease,pad=1280:720:(ow-iw)/2:(oh-ih)/2,format=yuv420p[v1]"
-            cmd2 += ["-filter_complex", fc, "-map", "[v1]", "-map", map_albl]
-            # CRITICAL: -movflags +faststart is REQUIRED for YouTube to be able to process the file.
-            cmd2 += [
-                "-c:v","libx264","-preset","superfast","-tune","stillimage",
-                "-c:a","aac","-b:a","192k",
-                "-movflags","+faststart",
-                "-shortest","-max_muxing_queue_size","4096"
+            # Common video encoding options
+            cmd_v += [
+                "-c:v", "libx264", "-preset", "superfast", "-tune", "stillimage",
+                "-c:a", "aac", "-b:a", "192k",
+                "-movflags", "+faststart", "-shortest",
+                "-max_muxing_queue_size", "4096"
             ]
-        else:
-            if mtype == "video":
-                cmd2 += ["-f","concat","-safe","0","-i",lst]
-                vf = f"setpts={1.0/speed:.4f}*PTS" if abs(speed - 1.0) > 0.001 else ""
-                if vf: cmd2 += ["-vf", vf]
-                if atempo: cmd2 += ["-af", atempo]
-                cmd2 += ["-c:v","libx264","-preset","superfast","-crf","28",
-                         "-c:a","aac","-b:a","128k","-movflags","+faststart","-max_muxing_queue_size","4096"]
-            else:
-                # CORRECT approach: use filter_complex concat filter.
-                # This fully decodes each audio file independently (handles ANY mix of codecs
-                # e.g. mp3 + m4a + ogg) and concatenates the raw PCM before re-encoding.
-                # The concat DEMUXER approach (previous attempt) only works when all files
-                # share the same codec, so it silently dropped all but the first file.
-                for p in file_list:
-                    cmd2 += ["-i", os.path.abspath(p)]
-                fc = "".join(f"[{i}:a]" for i in range(len(file_list))) + f"concat=n={len(file_list)}:v=0:a=1[a1]"
-                if atempo:
-                    fc += f";[a1]{atempo}[a2]"
-                map_lbl = "[a2]" if atempo else "[a1]"
+            if metadata:
+                for k, v in (metadata or {}).items():
+                    if v: cmd_v += ["-metadata", f"{k}={v}"]
+            abs_output = os.path.abspath(output_path)
+            cmd_v.append(abs_output)
 
-                if cover and os.path.exists(cover) and not make_video:
-                    cmd2 += ["-i", os.path.abspath(cover)]
-                    cov_idx = len(file_list)
-                    cmd2 += ["-filter_complex", fc, "-map", map_lbl, "-map", f"{cov_idx}:v",
-                             "-id3v2_version", "3",
-                             "-metadata:s:v", "title=Album cover",
-                             "-metadata:s:v", "comment=Cover (front)",
-                             "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "48000", "-max_muxing_queue_size", "4096"]
-                else:
-                    cmd2 += ["-filter_complex", fc, "-map", map_lbl, "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "48000", "-max_muxing_queue_size", "4096"]
-        
-        if metadata:
-            for k, v in (metadata or {}).items():
-                if v: cmd2 += ["-metadata", f"{k}={v}"]
-        # CRITICAL: always use the absolute path for output
-        abs_output = os.path.abspath(output_path)
-        cmd2.append(abs_output)
-        ok2, err2 = await _run_cmd(cmd2, 86400)
-        # Verify output at its absolute path
-        if ok2 and os.path.exists(abs_output) and os.path.getsize(abs_output) > 100:
-            return True, ""
-        else:
+            v_ok, v_err = await _run_cmd(cmd_v, 86400)
+            try:
+                if os.path.exists(tmp_audio): os.remove(tmp_audio)
+            except Exception: pass
+            if v_ok and os.path.exists(abs_output) and os.path.getsize(abs_output) > 100:
+                return True, ""
+            return False, v_err
+
+        elif mtype == "video":
+            # Pure video concat with optional speed adjustment (no image overlay)
+            cmd2 = ["ffmpeg", "-y", "-threads", "2",
+                    "-f", "concat", "-safe", "0", "-i", lst]
+            vf = f"setpts={1.0/speed:.4f}*PTS" if abs(speed - 1.0) > 0.001 else ""
+            if vf: cmd2 += ["-vf", vf]
+            if atempo: cmd2 += ["-af", atempo]
+            cmd2 += ["-c:v", "libx264", "-preset", "superfast", "-crf", "28",
+                     "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart",
+                     "-max_muxing_queue_size", "4096"]
+            if metadata:
+                for k, v in (metadata or {}).items():
+                    if v: cmd2 += ["-metadata", f"{k}={v}"]
+            abs_output = os.path.abspath(output_path)
+            cmd2.append(abs_output)
+            ok2, err2 = await _run_cmd(cmd2, 86400)
+            if ok2 and os.path.exists(abs_output) and os.path.getsize(abs_output) > 100:
+                return True, ""
             return False, err2
+
+        else:
+            # Pure audio re-encode: filter_complex concat (handles mixed codecs mp3+m4a+ogg).
+            # NOTE: This path is only used for CHUNK merges (≤5 files).
+            # Final combine of uniform parts is handled by the lossless path above.
+            cmd2 = ["ffmpeg", "-y", "-threads", "2"]
+            for p in file_list:
+                cmd2 += ["-i", os.path.abspath(p)]
+            fc = "".join(f"[{i}:a]" for i in range(len(file_list))) + f"concat=n={len(file_list)}:v=0:a=1[a1]"
+            if atempo:
+                fc += f";[a1]{atempo}[a2]"
+            map_lbl = "[a2]" if atempo else "[a1]"
+
+            if cover and os.path.exists(cover):
+                cmd2 += ["-i", os.path.abspath(cover)]
+                cov_idx = len(file_list)
+                cmd2 += ["-filter_complex", fc, "-map", map_lbl, "-map", f"{cov_idx}:v",
+                         "-id3v2_version", "3",
+                         "-metadata:s:v", "title=Album cover",
+                         "-metadata:s:v", "comment=Cover (front)",
+                         "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "48000",
+                         "-max_muxing_queue_size", "4096"]
+            else:
+                cmd2 += ["-filter_complex", fc, "-map", map_lbl,
+                         "-c:a", "libmp3lame", "-b:a", "192k", "-ar", "48000",
+                         "-max_muxing_queue_size", "4096"]
+            if metadata:
+                for k, v in (metadata or {}).items():
+                    if v: cmd2 += ["-metadata", f"{k}={v}"]
+            abs_output = os.path.abspath(output_path)
+            cmd2.append(abs_output)
+            ok2, err2 = await _run_cmd(cmd2, 86400)
+            if ok2 and os.path.exists(abs_output) and os.path.getsize(abs_output) > 100:
+                return True, ""
+            return False, err2
+
     except asyncio.TimeoutError:
         return False, "FFmpeg timed out"
     except Exception as e:
@@ -911,10 +925,16 @@ async def _run_job(jid, uid, bot):
                 for att in range(10):  # increased retries
                     try:
                         fp = await client.download_media(msg, file_name=dlp)
-                        if fp: break
+                        if fp and os.path.exists(fp):
+                            if os.path.getsize(fp) > 0:
+                                break
+                            else:
+                                try: os.remove(fp)
+                                except Exception: pass
+                                fp = None
                     except FloodWait as fw: await asyncio.sleep(fw.value + 2)
                     except Exception as e:
-                        if "TimeoutList" in str(e) or "Timeout" in str(e) or "Connection" in str(e):
+                        if "Timeout" in str(e) or "Connection" in str(e) or "Read" in str(e) or "MessageNotModified" in str(e):
                             if att < 9: await asyncio.sleep(3); continue
                         break
                 
@@ -937,8 +957,10 @@ async def _run_job(jid, uid, bot):
                 tc = f"{h:02d}:{m_:02d}:{s_:02d}"
                 log_entries.append((tc, original_name, global_seq))
 
-                # Probe duration for log
+                # Probe duration for log, fallback to Telegram API duration if ffprobe fails
                 dur = _ffprobe_duration(fp)
+                if dur <= 0 and media_obj:
+                    dur = float(getattr(media_obj, 'duration', 0) or 0)
                 # Apply speed factor to cumulative time
                 cumulative_secs += dur / max(speed, 0.1)
 
@@ -1005,7 +1027,7 @@ async def _run_job(jid, uid, bot):
 
             # Chunk parts: apply speed chunk-by-chunk to save MASSIVE amounts of RAM
             ok, err = await _ffmpeg_merge(
-                chunk_files_sorted, part_path, None, mtype, None, speed, False, progress_cb=chunk_prog)
+                chunk_files_sorted, part_path, None, mtype, None, speed, False, progress_cb=chunk_prog, is_chunk=True)
 
             if not ok:
                 await _db_up(jid, status="error", error=f"Chunk {chunk_num} merge failed: {err[:400]}")
@@ -1045,9 +1067,11 @@ async def _run_job(jid, uid, bot):
         effective_cover_for_video = video_cover or cover
 
         _vid_text = '\n🎥 Building MP4 video...' if make_video else ''
-        _spd_text = f'⚡ Applying speed {speed}x during final merge' if abs(speed-1.0)>0.001 else '🎯 Lossless combine (speed=1.0x)'
+        # Speed was already applied during chunk merging (Phase 2) — final combine is always 1.0x
+        _spd_text = f'⚡ Speed {speed}x already applied during chunk merge' if abs(speed-1.0)>0.001 else '🎯 Lossless combine (speed=1.0x)'
+        final_status_msg = None
         try:
-            await bot.send_message(uid,
+            final_status_msg = await bot.send_message(uid,
                 f"<b>🔀 Final combine: {len(part_files)} parts → {out_name}{out_ext}</b>\n"
                 f"{_spd_text}{_vid_text}")
         except: pass
@@ -1055,12 +1079,13 @@ async def _run_job(jid, uid, bot):
         part_files_sorted = sorted(part_files, key=lambda p: os.path.basename(p))
         final_dur = cumulative_secs
         last_edit2 = [time.time()]
+        _fsm = final_status_msg  # captured ref — avoids stale closure on last chunk's status_msg
         async def final_prog(cur_secs):
             now = time.time()
             if now - last_edit2[0] > 5:
                 pct = min(100, int((cur_secs / max(final_dur, 0.1)) * 100))
                 try:
-                    await status_msg.edit_text(
+                    if _fsm: await _fsm.edit_text(
                         f"<b>🔀 Final combine: {len(part_files)} parts → {out_name}{out_ext}</b>\n"
                         f"<code>{_bar(pct, 100)}</code>\n"
                         f"⏳ Progress: {pct}%"
@@ -1259,7 +1284,7 @@ async def _run_job(jid, uid, bot):
         markup = None
         if upload_to_yt and 'yt_vid_id' in locals() and yt_vid_id:
             markup = InlineKeyboardMarkup([
-                [InlineKeyboardButton("✏️ Edit YT Video Details", callback_data=f"mg#yt_edit#{jid}")]
+                [InlineKeyboardButton("✏️ Eᴅɪᴛ Yᴛ Vɪᴅᴇᴏ Dᴇᴛᴀɪʟs", callback_data=f"mg#yt_edit#{jid}")]
             ])
 
         try:
@@ -1329,7 +1354,7 @@ async def _render_list(bot, uid, msg_or_q, mtype):
             f"👇 Create your first {label} Merge below!</i>"
         )
         btns = InlineKeyboardMarkup([
-            [InlineKeyboardButton(f"➕ Cʀᴇᴀᴛᴇ {label} Mᴇʀɢᴇ", callback_data=f"mg#new_{mtype}")],
+            [InlineKeyboardButton(f"➕ Cʀᴇᴀᴛᴇ{label}Mᴇʀɢᴇ", callback_data=f"mg#new_{mtype}")],
             [InlineKeyboardButton("↩ Bᴀᴄᴋ", callback_data="settings#main")]
         ])
     else:
@@ -1369,9 +1394,9 @@ async def _render_list(bot, uid, msg_or_q, mtype):
             row.append(InlineKeyboardButton(f"🗑 [{short}]", callback_data=f"mg#del#{jid}"))
             btns_list.append(row)
 
-        btns_list.append([InlineKeyboardButton(f"➕ Cʀᴇᴀᴛᴇ {label} Mᴇʀɢᴇ", callback_data=f"mg#new_{mtype}")])
+        btns_list.append([InlineKeyboardButton(f"➕ Cʀᴇᴀᴛᴇ{label}Mᴇʀɢᴇ", callback_data=f"mg#new_{mtype}")])
         btns_list.append([InlineKeyboardButton("🔄 Rᴇғʀᴇsʜ", callback_data=f"mg#{mtype}_list")])
-        btns_list.append([InlineKeyboardButton("↩ Bᴀᴄᴋ", callback_data="settings#main")])
+        btns_list.append([InlineKeyboardButton("↩ Bᴀᴄᴋ", callback_data="mg#main")])
         btns = InlineKeyboardMarkup(btns_list)
 
     try:
@@ -1400,6 +1425,16 @@ async def mg_cb(bot, query):
     action = parts[1] if len(parts) > 1 else ""
     param = parts[2] if len(parts) > 2 else ""
 
+    # ── Main Menu ────────────────────────────────────────────────────────
+    if action == "main":
+        text = "<b>❪ Mᴇʀɢᴇʀ Sʏsᴛᴇᴍ ❫</b>\n\nChoose which type of merger you want to use:"
+        btns = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Mᴇʀɢᴇ Aᴜᴅɪᴏ", callback_data="mg#audio_list")],
+            [InlineKeyboardButton("Mᴇʀɢᴇ Vɪᴅᴇᴏ", callback_data="mg#video_list")],
+            [InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="back")]
+        ])
+        return await query.message.edit_text(text, reply_markup=btns)
+
     # ── List views ────────────────────────────────────────────────────────
     if action == "audio_list":
         return await _render_list(bot, uid, query, "audio")
@@ -1422,11 +1457,11 @@ async def mg_cb(bot, query):
         text = _build_info_text(job)
 
         info_btns = [
-            [InlineKeyboardButton("🔄 Refresh", callback_data=f"mg#info#{param}")],
+            [InlineKeyboardButton("🔄 Rᴇꜰʀᴇsʜ", callback_data=f"mg#info#{param}")],
         ]
         # Only show Edit YT button if the job is done and has a YouTube video ID stored
         if job.get("status") == "done" and job.get("yt_video_id"):
-            info_btns.append([InlineKeyboardButton("✏️ Edit YT Title/Desc", callback_data=f"mg#yt_edit#{param}")])
+            info_btns.append([InlineKeyboardButton("✏️ Eᴅɪᴛ Yᴛ Tɪᴛʟᴇ/Dᴇsᴄ", callback_data=f"mg#yt_edit#{param}")])
         info_btns.append([InlineKeyboardButton("↩ Bᴀᴄᴋ", callback_data=f"mg#{mtype}_list")])
         await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(info_btns))
 
@@ -1445,10 +1480,10 @@ async def mg_cb(bot, query):
                 "from this job's stored data.\n\n"
                 "Send <b>CONFIRM</b> to proceed, or /cancel to abort.",
                 reply_markup=ReplyKeyboardMarkup(
-                    [[KeyboardButton("CONFIRM")], [KeyboardButton("/cancel")]],
+                    [[KeyboardButton("CONFIRM")], [KeyboardButton("⛔ Cᴀɴᴄᴇʟ")]],
                     resize_keyboard=True, one_time_keyboard=True))
-            if "/cancel" in r.text.lower() or "confirm" not in r.text.upper():
-                return await bot.send_message(uid, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+            if getattr(r, "text", None) and any(x in str(r.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
+                return await bot.send_message(uid, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
             await bot.send_message(uid, "<code>Updating YouTube video…</code>", reply_markup=ReplyKeyboardRemove())
             # Re-generate description from stored job data
             import re as _re
@@ -1502,7 +1537,7 @@ async def mg_cb(bot, query):
         try:
             r = await _mg_ask(bot, uid,
                 "<b>✏️ Send new name for this merge job:</b>",
-                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/cancel")]],
+                reply_markup=ReplyKeyboardMarkup([[KeyboardButton("⛔ Cᴀɴᴄᴇʟ")]],
                     resize_keyboard=True, one_time_keyboard=True))
             if "/cancel" not in r.text.lower():
                 await _db_up(param, name=r.text.strip()[:100])
@@ -1510,7 +1545,7 @@ async def mg_cb(bot, query):
                     f"✅ Renamed to <b>{r.text.strip()[:100]}</b>",
                     reply_markup=ReplyKeyboardRemove())
             else:
-                await bot.send_message(uid, "<b>Cancelled.</b>",
+                await bot.send_message(uid, "<i>Process Cancelled Successfully!</i>",
                                        reply_markup=ReplyKeyboardRemove())
         except: pass
         job = await _db_get(param)
@@ -1600,8 +1635,8 @@ async def _create_flow(bot, uid, mtype="audio"):
         msg = await _mg_ask(bot, uid,
             f"<b>{icon} New {label} Merge</b>\n\n<b>Step 1/7:</b> Select account:",
             reply_markup=ReplyKeyboardMarkup(kb, resize_keyboard=True, one_time_keyboard=True))
-        if not msg.text or "Cancel" in msg.text:
-            return await bot.send_message(uid, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+        if not msg.text or (getattr(msg, 'text', None) and any(x in msg.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔'])):
+            return await bot.send_message(uid, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
 
         sel_name = msg.text.split(" ", 1)[1] if " " in msg.text else msg.text
         acc = next((a for a in accounts if a["name"] == sel_name), None)
@@ -1613,8 +1648,8 @@ async def _create_flow(bot, uid, mtype="audio"):
             "<b>Step 2/7:</b> Send <b>start file link</b>\n\n"
             "<i>Example: https://t.me/c/123456/100</i>",
             reply_markup=ReplyKeyboardRemove())
-        if not msg.text or msg.text.lower() == "/cancel":
-            return await bot.send_message(uid, "<b>Cancelled.</b>")
+        if not msg.text or (('cancel' in msg.text.lower() or 'cᴀɴᴄᴇʟ' in msg.text.lower() or '⛔' in msg.text) or 'cᴀɴᴄᴇʟ' in msg.text.lower() or '⛔' in msg.text):
+            return await bot.send_message(uid, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
         ref_s, sid = _parse_link(msg.text)
         if sid is None:
             return await bot.send_message(uid, "<b>❌ Invalid link.</b>")
@@ -1623,8 +1658,8 @@ async def _create_flow(bot, uid, mtype="audio"):
         # Step 3: End link
         msg = await _mg_ask(bot, uid,
             "<b>Step 3/7:</b> Send <b>end file link</b>")
-        if not msg.text or msg.text.lower() == "/cancel":
-            return await bot.send_message(uid, "<b>Cancelled.</b>")
+        if not msg.text or (('cancel' in msg.text.lower() or 'cᴀɴᴄᴇʟ' in msg.text.lower() or '⛔' in msg.text) or 'cᴀɴᴄᴇʟ' in msg.text.lower() or '⛔' in msg.text):
+            return await bot.send_message(uid, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
         ref_e, eid = _parse_link(msg.text)
         if eid is None:
             return await bot.send_message(uid, "<b>❌ Invalid link.</b>")
@@ -1646,8 +1681,8 @@ async def _create_flow(bot, uid, mtype="audio"):
             msg = await _mg_ask(bot, uid,
                 f"<b>Step 4/7:</b> Destination channel\n<b>Range:</b> {sid}→{eid} ({total} msgs)",
                 reply_markup=ReplyKeyboardMarkup(ch_kb, resize_keyboard=True, one_time_keyboard=True))
-            if not msg.text or "Cancel" in msg.text:
-                return await bot.send_message(uid, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+            if not msg.text or (getattr(msg, 'text', None) and any(x in msg.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔'])):
+                return await bot.send_message(uid, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
             if "Skip" not in msg.text:
                 title = msg.text.replace("📢 ","").strip()
                 ch = next((c for c in channels if c["title"] == title), None)
@@ -1661,8 +1696,8 @@ async def _create_flow(bot, uid, mtype="audio"):
         msg = await _mg_ask(bot, uid,
             "<b>Step 5/7:</b> Output <b>filename</b> (no extension)",
             reply_markup=ReplyKeyboardRemove())
-        if not msg.text or msg.text.lower() == "/cancel":
-            return await bot.send_message(uid, "<b>Cancelled.</b>")
+        if not msg.text or (('cancel' in msg.text.lower() or 'cᴀɴᴄᴇʟ' in msg.text.lower() or '⛔' in msg.text) or 'cᴀɴᴄᴇʟ' in msg.text.lower() or '⛔' in msg.text):
+            return await bot.send_message(uid, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
         out_name = re.sub(r'[<>:"/\\|?*]', '_', msg.text.strip())
 
         # Scan files for total size and duration
@@ -1825,7 +1860,7 @@ async def _create_flow(bot, uid, mtype="audio"):
                 "<b>Step 6e/9:</b> Send the <b>Outro Image</b> to show at the end of the video for 5 seconds.\n\n"
                 "Send <code>4auto</code> to use the 4 default outro images (appears 4 times during the video).\n"
                 "Send <code>skip</code> to skip the outro.",
-                reply_markup=ReplyKeyboardMarkup([["4auto"], ["skip"], ["/cancel"]], resize_keyboard=True, one_time_keyboard=True))
+                reply_markup=ReplyKeyboardMarkup([["4auto"], ["skip"], ["⛔ Cᴀɴᴄᴇʟ"]], resize_keyboard=True, one_time_keyboard=True))
             tmp_odir = os.path.abspath(f"merge_tmp/_ocover_{uid}")
             os.makedirs(tmp_odir, exist_ok=True)
             
@@ -1913,11 +1948,11 @@ async def _create_flow(bot, uid, mtype="audio"):
                 [["✅ Start Merge"],["❌ Cancel"]],
                 resize_keyboard=True, one_time_keyboard=True))
 
-        if not msg.text or "Cancel" in msg.text:
+        if not msg.text or (getattr(msg, 'text', None) and any(x in msg.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔'])):
             for td in (tmp_dir, f"merge_tmp/_vcover_{uid}", f"merge_tmp/_ocover_{uid}", f"merge_tmp/_ythumb_{uid}"):
                 try: shutil.rmtree(os.path.abspath(td), ignore_errors=True)
                 except: pass
-            return await bot.send_message(uid, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+            return await bot.send_message(uid, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
 
         # Create job
         jid = str(uuid.uuid4())

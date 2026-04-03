@@ -7,6 +7,7 @@ add_handler() after the client is started (Pyrogram 2.x requirement).
 """
 import logging
 import asyncio
+import random
 from pyrogram import Client, filters, enums
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from pyrogram.errors import UserNotParticipant
@@ -393,7 +394,7 @@ async def _send_welcome(client, message, bot_id: str = None):
 
     bot_about = await db.get_share_bot_about(bot_id) if bot_id else {}
     # menu_image_id is set by admin via "🖼 Menu Image" in per-bot settings
-    welcome_img = bot_about.get('menu_image_id') if bot_about else None
+    welcome_img = random.choice(bot_about.get('menu_image_ids', [])) if bot_about and bot_about.get('menu_image_ids') else None
 
     buttons = [
         [

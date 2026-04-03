@@ -386,14 +386,29 @@ async def _run_job(job_id: str, user_id: int):
             await _update_job(job_id, last_seen_id=last_seen)
             logger.info(f"[Job {job_id}] Initialised at msg ID {last_seen}")
 
-        # Warm up peer cache
+        # Warm up peer cache and identify exact DM source type
+        is_dm_source = False
+        from pyrogram.enums import ChatType
+        
+        if str(from_chat).lower() in ("me", "saved"):
+            is_dm_source = True
+        else:
+            try:
+                peer_chat = await client.get_chat(from_chat)
+                if peer_chat.type in (ChatType.PRIVATE, ChatType.BOT):
+                    is_dm_source = True
+                from_chat = peer_chat.id
+            except Exception as warn_e:
+                logger.warning(f"[Job {job_id}] Pre-fetch peer resolve warning: {warn_e}")
+                if isinstance(from_chat, int) and from_chat >= 0:
+                    is_dm_source = True
+                    
         try:
-            await client.get_chat(from_chat)
             await client.get_chat(to_chat)
             if to_chat_2:
                 await client.get_chat(to_chat_2)
-        except Exception as warn_e:
-            logger.warning(f"[Job {job_id}] Pre-fetch peer resolve warning: {warn_e}")
+        except Exception:
+            pass
 
         #  BATCH PHASE 
         if job.get("batch_mode") and not job.get("batch_done"):
@@ -444,11 +459,7 @@ async def _run_job(job_id: str, user_id: int):
             # For DM/username sources we collect ALL messages via get_chat_history
             # (which properly scopes to the specific conversation), sort chronologically,
             # and forward them all in one go — then skip the while loop entirely.
-            def _is_dm_source(fc):
-                if isinstance(fc, int): return fc >= 0
-                return True  # @username, "me"
-
-            if not is_bot and _is_dm_source(from_chat):
+            if not is_bot and is_dm_source:
                 logger.info(f"[Job {job_id}] DM batch: collecting via get_chat_history")
                 dm_all = []
                 batch_start_id = int(job.get('batch_start_id') or 1)
@@ -554,12 +565,8 @@ async def _run_job(job_id: str, user_id: int):
                 # ── Fetch: for userbot + DM/username source, get_messages() uses
                 # messages.GetMessages WITHOUT a peer → fetches from global inbox
                 # (i.e. wrong chat). Always use get_chat_history for DM sources.
-                def _is_dm_source(fc):
-                    if isinstance(fc, int): return fc >= 0   # positive = DM/user
-                    return True  # string (@username, "me") = DM type
-
                 try:
-                    if not is_bot and _is_dm_source(from_chat):
+                    if not is_bot and is_dm_source:
                         # Userbot + DM/bot source → paginate via get_chat_history
                         batch_msgs = []
                         async for m in client.get_chat_history(from_chat, limit=BATCH_CHUNK, offset_id=batch_cursor):
@@ -931,7 +938,7 @@ async def _render_jobs_list(bot, user_id: int, message_or_query):
         )
         btns = InlineKeyboardMarkup([
             [InlineKeyboardButton("➕ Cʀᴇᴀᴛᴇ Nᴇᴡ Jᴏʙ", callback_data="job#new")],
-            [InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="back")]
+            [InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="back")]
         ])
     else:
         lines = ["<b>»  Your Live Jobs</b>\n"]
@@ -967,15 +974,16 @@ async def _render_jobs_list(bot, user_id: int, message_or_query):
             if st == "running":
                 row.append(InlineKeyboardButton(f"⏹ Sᴛᴏᴘ [{short}]", callback_data=f"job#stop#{jid}"))
             else:
-                row.append(InlineKeyboardButton(f"»  Sᴛᴀʀᴛ [{short}]", callback_data=f"job#start#{jid}"))
-            row.append(InlineKeyboardButton(f"»  Iɴғᴏ [{short}]", callback_data=f"job#info#{jid}"))
+                row.append(InlineKeyboardButton(f"Sᴛᴀʀᴛ [{short}]", callback_data=f"job#start#{jid}"))
+                row.append(InlineKeyboardButton(f"🔁 Rᴇsᴇᴛ [{short}]", callback_data=f"job#reset#{jid}"))
+            row.append(InlineKeyboardButton(f"Iɴғᴏ [{short}]", callback_data=f"job#info#{jid}"))
             row.append(InlineKeyboardButton(f"✏️ Nᴀᴍᴇ [{short}]", callback_data=f"job#rename#{jid}"))
-            row.append(InlineKeyboardButton(f"»  Dᴇʟᴇᴛᴇ [{short}]",  callback_data=f"job#del#{jid}"))
+            row.append(InlineKeyboardButton(f"Dᴇʟᴇᴛᴇ [{short}]",  callback_data=f"job#del#{jid}"))
             btns_list.append(row)
 
-        btns_list.append([InlineKeyboardButton("»  Cʀᴇᴀᴛᴇ Nᴇᴡ Jᴏʙ", callback_data="job#new")])
-        btns_list.append([InlineKeyboardButton("»  Rᴇғʀᴇsʜ",        callback_data="job#list")])
-        btns_list.append([InlineKeyboardButton("⫷ Bᴀᴄᴋ", callback_data="back")])
+        btns_list.append([InlineKeyboardButton("Cʀᴇᴀᴛᴇ Nᴇᴡ Jᴏʙ", callback_data="job#new")])
+        btns_list.append([InlineKeyboardButton("Rᴇғʀᴇsʜ",        callback_data="job#list")])
+        btns_list.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="back")])
         btns = InlineKeyboardMarkup(btns_list)
 
     try:
@@ -1013,7 +1021,7 @@ async def job_rename_cb(bot, query):
     
     r = await _ask(bot, user_id,
         "<b>✏️ Edit Live Job Name</b>\n\nSend a new name for this job:",
-        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/cancel")]], resize_keyboard=True, one_time_keyboard=True))
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("⛔ Cᴀɴᴄᴇʟ")]], resize_keyboard=True, one_time_keyboard=True))
     if "/cancel" not in r.text.lower():
         await db.db[COLL].update_one({"job_id": job_id}, {"$set": {"name": r.text.strip()[:100]}})
         await bot.send_message(user_id, f"✅ Live Job renamed to <b>{r.text.strip()[:100]}</b>", reply_markup=ReplyKeyboardRemove())
@@ -1074,7 +1082,7 @@ async def job_info_cb(bot, query):
         text += f"\n<b>‣  Error:</b> <code>{job['error']}</code>"
 
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="job#list")
+        InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="job#list")
     ]]))
 
 
@@ -1090,6 +1098,30 @@ async def job_stop_cb(bot, query):
         task.cancel()
     await _update_job(job_id, status="stopped")
     await query.answer("⏹ Job stopped.", show_alert=False)
+    await _render_jobs_list(bot, user_id, query)
+
+
+@Client.on_callback_query(filters.regex(r'^job#reset#'))
+async def job_reset_cb(bot, query):
+    job_id  = query.data.split("#", 2)[2]
+    user_id = query.from_user.id
+    job = await _get_job(job_id)
+    if not job or job.get("user_id") != user_id:
+        return await query.answer("⛔ Unauthorized.", show_alert=True)
+    task = _job_tasks.pop(job_id, None)
+    if task and not task.done():
+        task.cancel()
+    # Reset: clear batch_done, reset batch_cursor, last_seen_id, forwarded
+    start_id = int(job.get("batch_start_id") or 1)
+    await _update_job(job_id,
+        status="stopped",
+        batch_done=False,
+        batch_cursor=start_id,
+        last_seen_id=0,
+        forwarded=0,
+        error=""
+    )
+    await query.answer("🔁 Job reset to start!", show_alert=True)
     await _render_jobs_list(bot, user_id, query)
 
 
@@ -1139,23 +1171,31 @@ async def newjob_cmd(bot, message):
     await _create_job_flow(bot, message.from_user.id)
 
 
-async def _ask_dest(bot, user_id: int, channels: list, step_label: str, optional: bool = False) -> tuple:
-    """Helper: ask user to pick a channel from their saved list. Returns (chat_id, title, cancelled)."""
+async def _ask_dest(bot, user_id: int, channels: list, step_label: str, optional: bool = False, undo_btn: bool = False) -> tuple:
+    """Helper: ask user to pick a channel from their saved list. Returns (chat_id, title, cancelled).
+    cancelled='undo' means undo pressed."""
     btns = [[KeyboardButton(ch['title'])] for ch in channels]
     if optional:
-        btns.append([KeyboardButton("⏭ Skip (no second destination)")])
-    btns.append([KeyboardButton("/cancel")])
+        btns.append([KeyboardButton("⏭ Sᴋɪᴘ (no second destination)")])
+    extra = []
+    if undo_btn:
+        extra.append(KeyboardButton("↩️ Uɴᴅᴏ"))
+    extra.append(KeyboardButton("⛔ Cᴀɴᴄᴇʟ"))
+    btns.append(extra)
 
     resp = await _ask(bot, user_id, step_label,
                       reply_markup=ReplyKeyboardMarkup(btns, resize_keyboard=True, one_time_keyboard=True))
 
     txt = resp.text.strip()
-    if "/cancel" in txt:
-        await bot.send_message(user_id, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
-        return None, None, True   # cancelled=True
+    if "⛔" in txt or "Cᴀɴᴄᴇʟ" in txt or txt.startswith("/cancel"):
+        await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+        return None, None, True
+
+    if undo_btn and ("↩️" in txt or "Uɴᴅᴏ" in txt or txt.startswith("/undo")):
+        return None, None, "undo"
 
     if optional and "skip" in txt.lower():
-        return None, None, False  # skipped, not cancelled
+        return None, None, False
 
     for ch in channels:
         if ch['title'] == txt:
@@ -1164,58 +1204,54 @@ async def _ask_dest(bot, user_id: int, channels: list, step_label: str, optional
     return None, None, False
 
 
-async def _ask_topic(bot, user_id: int, dest_label: str) -> int | None:
-    """Ask for optional topic thread ID. Returns int or None."""
-    r = await _ask(bot, user_id,
-        f"<b>Topic Thread for {dest_label} (Optional)</b>\n\n"
-        "• Send the <b>Thread ID</b> if you want to post inside a specific group topic\n"
-        "• Send <b>0</b> or press 'No Topic' to post in the main chat\n\n"
-        "<i>Find Thread ID: open the topic in Telegram Web → number after <code>/topics/</code> in URL</i>",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("0 (No Topic)")], [KeyboardButton("/cancel")]],
-            resize_keyboard=True, one_time_keyboard=True
-        ))
-    t = r.text.strip()
-    if "/cancel" in t:
-        return None
-    if t.isdigit() and int(t) > 0:
-        return int(t)
-    return None
-
-
 async def _create_job_flow(bot, user_id: int):
-    #  Step 1: Name 
+    CANCEL_BTN = KeyboardButton("⛔ Cᴀɴᴄᴇʟ")
+    UNDO_BTN   = KeyboardButton("↩️ Uɴᴅᴏ")
+
+    def _cancel(txt): return txt.strip().startswith("/cancel") or "⛔" in txt or "Cᴀɴᴄᴇʟ" in txt
+    def _undo(txt):   return txt.strip().startswith("/undo") or "↩️" in txt or "Uɴᴅᴏ" in txt
+
+    # ── Step 1: Name ──────────────────────────────────────────────
     name_r = await _ask(bot, user_id,
         "<b>»  Create Live Job — Step 1/7</b>\n\n"
-        "Send a name for this job, or press 'Default' to use a random name.",
-        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Default")], [KeyboardButton("/cancel")]], resize_keyboard=True, one_time_keyboard=True))
-    if "/cancel" in name_r.text:
-        return await bot.send_message(user_id, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
-    
+        "Send a <b>name</b> for this job, or press <b>Default</b>.",
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Default")], [CANCEL_BTN]], resize_keyboard=True, one_time_keyboard=True))
+    if _cancel(name_r.text):
+        return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+
     job_name = name_r.text.strip()[:100]
     if job_name.lower() == "default":
         job_name = None
 
-    #  Step 2: Account 
+    # ── Step 2: Account ───────────────────────────────────────────
     accounts = await db.get_bots(user_id)
     if not accounts:
         return await bot.send_message(user_id,
             "<b>❌ No accounts. Add one in /settings → Accounts first.</b>")
 
-    acc_btns = [[KeyboardButton(
-        f"{'»  Bot' if a.get('is_bot', True) else '»  Userbot'}: "
-        f"{a.get('username') or a.get('name', 'Unknown')} [{a['id']}]"
-    )] for a in accounts]
-    acc_btns.append([KeyboardButton("/cancel")])
+    def _acc_label(a):
+        kind = "Bot" if a.get("is_bot", True) else "Userbot"
+        name = a.get("username") or a.get("name", "Unknown")
+        return f"{kind}: {name} [{a['id']}]"
 
-    acc_r = await bot.ask(user_id,
+    acc_btns = [[KeyboardButton(_acc_label(a))] for a in accounts]
+    acc_btns.append([CANCEL_BTN])
+
+    acc_r = await _ask(bot, user_id,
         "<b>»  Create Live Job — Step 2/7</b>\n\n"
-        "Choose which account to use:\n"
-        "<i>(Userbot required for private chats)</i>",
+        "Choose which <b>account</b> to use:\n\n"
+        "<blockquote expandable>"
+        "🤖 <b>Bot</b> — works for public channels and groups where the bot is admin.\n"
+        "👤 <b>Userbot</b> — required for:\n"
+        "  • Private/restricted channels\n"
+        "  • Forwarding with copy (no forward tag)\n"
+        "  • Saved Messages as source\n"
+        "  • Groups where bots are blocked"
+        "</blockquote>",
         reply_markup=ReplyKeyboardMarkup(acc_btns, resize_keyboard=True, one_time_keyboard=True))
 
-    if "/cancel" in acc_r.text:
-        return await acc_r.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+    if _cancel(acc_r.text):
+        return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
 
     acc_id = None
     if "[" in acc_r.text and "]" in acc_r.text:
@@ -1224,23 +1260,46 @@ async def _create_job_flow(bot, user_id: int):
     sel_acc = (await db.get_bot(user_id, acc_id)) if acc_id else accounts[0]
     is_bot  = sel_acc.get("is_bot", True)
 
-    #  Step 3: Source 
-    src_r = await _ask(bot, user_id,
-        "<b>Step 3/7 — Source Chat</b>\n\n"
-        "Send one of:\n"
-        "• <code>@username</code> or channel link\n"
-        "• Numeric ID (e.g. <code>-1001234567890</code>)\n"
-        "• <code>me</code> for Saved Messages (userbot only)\n\n"
-        "/cancel to abort",
-        reply_markup=ReplyKeyboardRemove())
+    # ── Step 3: Source ────────────────────────────────────────────
+    while True:
+        src_r = await _ask(bot, user_id,
+            "<b>Step 3/7 — Source Chat</b>\n\n"
+            "Send the <b>source channel, group, or chat</b> to watch for new messages.\n\n"
+            "<blockquote expandable>"
+            "Accepted formats:\n"
+            "• <code>@username</code> — public channel/group username\n"
+            "• <code>https://t.me/username</code> — public link\n"
+            "• <code>https://t.me/c/1234567890/1</code> — private channel link\n"
+            "• <code>-1001234567890</code> — numeric chat ID (negative for channels/groups)\n"
+            "• <code>me</code> — your own Saved Messages (Userbot only)\n\n"
+            "📌 For private channels: use a Userbot that is a member.\n"
+            "📌 For public channels: Bot works if it can read messages.\n"
+            "📌 Group Topics: supported — you will be asked for a thread ID next.\n"
+            "📌 Bot DM: use the bot's username or numeric ID."
+            "</blockquote>",
+            reply_markup=ReplyKeyboardMarkup([[UNDO_BTN, CANCEL_BTN]], resize_keyboard=True, one_time_keyboard=True))
 
-    if src_r.text.strip().startswith("/cancel"):
-        return await src_r.reply("<b>Cancelled.</b>")
+        if _cancel(src_r.text):
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+        if _undo(src_r.text):
+            # redo step 2
+            acc_r2 = await _ask(bot, user_id,
+                "<b>↩️ Redo — Step 2/7: Account</b>\n\nChoose the account again:",
+                reply_markup=ReplyKeyboardMarkup(acc_btns, resize_keyboard=True, one_time_keyboard=True))
+            if _cancel(acc_r2.text):
+                return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+            if "[" in acc_r2.text and "]" in acc_r2.text:
+                try: acc_id = int(acc_r2.text.split('[')[-1].split(']')[0])
+                except Exception: pass
+            sel_acc = (await db.get_bot(user_id, acc_id)) if acc_id else accounts[0]
+            is_bot  = sel_acc.get("is_bot", True)
+            continue
+        break
 
     from_chat_raw = src_r.text.strip()
     if from_chat_raw.lower() in ("me", "saved"):
         if is_bot:
-            return await src_r.reply("<b>❌ Saved Messages require a Userbot account.</b>")
+            return await bot.send_message(user_id, "<b>❌ Saved Messages require a Userbot account.</b>")
         from_chat  = "me"
         from_title = "Saved Messages"
     else:
@@ -1270,67 +1329,124 @@ async def _create_job_flow(bot, user_id: int):
 
     from_thread = await _ask_topic(bot, user_id, "Source")
 
-    #  Step 4: First Destination 
+    # ── Step 4: First Destination ─────────────────────────────────
     channels = await db.get_user_channels(user_id)
     if not channels:
         return await bot.send_message(user_id,
             "<b>❌ No target channels saved. Add via /settings → Channels.</b>",
             reply_markup=ReplyKeyboardRemove())
 
-    to_chat, to_title, cancelled = await _ask_dest(bot, user_id, channels,
-        "<b>Step 4/7 — Primary Destination</b>\n\nWhere should new messages be forwarded?")
-    if cancelled or not to_chat:
-        return
+    while True:
+        to_chat, to_title, cancelled = await _ask_dest(bot, user_id, channels,
+            "<b>Step 4/7 — Primary Destination</b>\n\nWhere should new messages be forwarded?\n\n"
+            "<blockquote expandable>"
+            "Choose from your saved channels/groups.\n"
+            "To add a channel, go to /settings → Channels.\n"
+            "The account must be an admin with send permissions."
+            "</blockquote>",
+            undo_btn=True)
+        if cancelled == "undo":
+            # redo source step
+            src_r2 = await _ask(bot, user_id,
+                "<b>↩️ Redo — Step 3/7: Source Chat</b>\n\nSend source chat again:",
+                reply_markup=ReplyKeyboardMarkup([[CANCEL_BTN]], resize_keyboard=True, one_time_keyboard=True))
+            if _cancel(src_r2.text):
+                return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+            from_chat_raw = src_r2.text.strip()
+            from_chat = from_chat_raw
+            if from_chat.lstrip('-').isdigit():
+                from_chat = int(from_chat)
+            try:
+                chat_obj2   = await bot.get_chat(from_chat)
+                from_title  = getattr(chat_obj2, "title", None) or str(from_chat)
+            except Exception:
+                from_title = str(from_chat)
+            continue
+        elif cancelled:
+            return
+        break
 
     to_thread = await _ask_topic(bot, user_id, "Primary Destination")
 
-    #  Step 5: Second Destination (Optional) 
+    # ── Step 5: Second Destination (Optional) ─────────────────────
     to_chat_2, to_title_2, cancelled2 = await _ask_dest(bot, user_id, channels,
         "<b>Step 5/7 — Second Destination (Optional)</b>\n\n"
         "Messages will be sent to <b>both</b> destinations when a new message arrives.\n"
-        "Press 'Skip' if you only need one destination.",
+        "Press Skip if you only need one destination.",
         optional=True)
-    if cancelled2:
+    if cancelled2 is True:
         return
 
     to_thread_2 = None
     if to_chat_2:
         to_thread_2 = await _ask_topic(bot, user_id, "Second Destination")
 
-    #  Step 6: Batch Mode 
-    batch_r = await _ask(bot, user_id,
-        "<b>Step 6/7 — Batch Mode (Copy Old Messages First)</b>\n\n"
-        "Do you want to copy existing (old) messages before going live?\n\n"
-        "• <b>ON</b> — first copies old messages, then watches for new ones\n"
-        "• <b>OFF</b> — only watches for NEW messages from now on (current behavior)\n\n"
-        "If ON, you will choose a starting message ID next.\n"
-        "<i>Batch runs sequentially before live mode starts.</i>",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("✅ ON (Copy old messages first)")],
-             [KeyboardButton("❌ OFF (Live only)")],
-             [KeyboardButton("/cancel")]],
-            resize_keyboard=True, one_time_keyboard=True
-        ))
+    # ── Step 6: Batch Mode ────────────────────────────────────────
+    while True:
+        batch_r = await _ask(bot, user_id,
+            "<b>Step 6/7 — Batch Mode (Copy Old Messages First)</b>\n\n"
+            "Do you want to copy existing (old) messages before going live?\n\n"
+            "<blockquote expandable>"
+            "• <b>ON</b> — first copies old messages, then watches for new ones.\n"
+            "• <b>OFF</b> — only watches for NEW messages from now on.\n\n"
+            "If ON, you will choose a starting message ID next.\n"
+            "Batch runs sequentially before live mode starts."
+            "</blockquote>",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("✅ ON (Copy old messages first)")],
+                 [KeyboardButton("❌ OFF (Live only)")],
+                 [UNDO_BTN, CANCEL_BTN]],
+                resize_keyboard=True, one_time_keyboard=True
+            ))
 
-    if "/cancel" in batch_r.text:
-        return await batch_r.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+        if _cancel(batch_r.text):
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+        if _undo(batch_r.text):
+            # redo destination
+            to_chat, to_title, cancelled = await _ask_dest(bot, user_id, channels,
+                "<b>↩️ Redo — Step 4/7: Primary Destination</b>\n\nChoose destination again:")
+            if cancelled:
+                return
+            to_thread = await _ask_topic(bot, user_id, "Primary Destination")
+            continue
+        break
 
-    batch_mode    = "on" in batch_r.text.lower()
+    batch_mode     = "on" in batch_r.text.lower()
     batch_start_id = 1
-    batch_end_id   = 0  # 0 = up to current latest
+    batch_end_id   = 0
 
     if batch_mode:
-        range_r = await _ask(bot, user_id,
-            "<b>Batch Range</b>\n\n"
-            "Choose where to start the batch:\n\n"
-            "• Send <b>ALL</b> to start from the very first message\n"
-            "• Send a <b>start ID</b> (e.g. <code>500</code>) to start from that message\n"
-            "• Send <b>start_id:end_id</b> (e.g. <code>500:2000</code>) for a specific range\n\n"
-            "<i>After the batch finishes, the job automatically switches to live mode.</i>",
-            reply_markup=ReplyKeyboardRemove())
+        while True:
+            range_r = await _ask(bot, user_id,
+                "<b>Batch Range</b>\n\n"
+                "Choose where to start the batch:\n\n"
+                "<blockquote expandable>"
+                "• <b>ALL</b> — start from the very first message\n"
+                "• <code>500</code> — start from message ID 500\n"
+                "• <code>500:2000</code> — copy only IDs 500 through 2000\n\n"
+                "After the batch finishes, the job automatically switches to live mode."
+                "</blockquote>",
+                reply_markup=ReplyKeyboardMarkup(
+                    [[KeyboardButton("ALL")], [UNDO_BTN, CANCEL_BTN]],
+                    resize_keyboard=True, one_time_keyboard=True))
 
-        if "/cancel" in range_r.text:
-            return await range_r.reply("<b>Cancelled.</b>")
+            if _cancel(range_r.text):
+                return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+            if _undo(range_r.text):
+                # redo batch on/off
+                batch_r2 = await _ask(bot, user_id,
+                    "<b>↩️ Redo — Step 6/7: Batch Mode</b>\n\nON or OFF?",
+                    reply_markup=ReplyKeyboardMarkup(
+                        [[KeyboardButton("✅ ON (Copy old messages first)")],
+                         [KeyboardButton("❌ OFF (Live only)")], [CANCEL_BTN]],
+                        resize_keyboard=True, one_time_keyboard=True))
+                if _cancel(batch_r2.text):
+                    return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+                batch_mode = "on" in batch_r2.text.lower()
+                if not batch_mode:
+                    break
+                continue
+            break
 
         rtext = range_r.text.strip().lower()
         if rtext != "all":
@@ -1344,24 +1460,39 @@ async def _create_job_flow(bot, user_id: int):
                 try: batch_start_id = int(rtext)
                 except Exception: pass
 
-    #  Step 6: Size / Duration Limit 
-    limit_r = await _ask(bot, user_id,
-        "<b>Step 7/7 — Per-Job Size/Duration Limit</b>\n\n"
-        "Set a maximum file size and/or duration for this job.\n"
-        "Files above the limit will be <b>silently skipped</b>.\n\n"
-        "<b>Format options:</b>\n"
-        "• <code>0</code> — no limit (forward everything)\n"
-        "• <code>50</code> — skip files larger than 50 MB\n"
-        "• <code>50:10</code> — skip files larger than 50 MB <b>or</b> longer than 10 minutes\n"
-        "• <code>0:5</code> — no size limit, but skip files longer than 5 minutes\n\n"
-        "<i>Format: <b>max_mb:max_minutes</b>  (0 = no limit)</i>",
-        reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("0 (No limit)")], [KeyboardButton("/cancel")]],
-            resize_keyboard=True, one_time_keyboard=True
-        ))
+    # ── Step 7: Size / Duration Limit ─────────────────────────────
+    while True:
+        limit_r = await _ask(bot, user_id,
+            "<b>Step 7/7 — Per-Job Size/Duration Limit</b>\n\n"
+            "Set a maximum file size and/or duration for this job.\n"
+            "Files above the limit will be <b>silently skipped</b>.\n\n"
+            "<blockquote expandable>"
+            "Format options:\n"
+            "• <code>0</code> — no limit (forward everything)\n"
+            "• <code>50</code> — skip files larger than 50 MB\n"
+            "• <code>50:10</code> — skip files larger than 50 MB <b>or</b> longer than 10 minutes\n"
+            "• <code>0:5</code> — no size limit, but skip files longer than 5 minutes\n\n"
+            "Format: <b>max_mb:max_minutes</b>  (0 = no limit)"
+            "</blockquote>",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("0 (No limit)")], [UNDO_BTN, CANCEL_BTN]],
+                resize_keyboard=True, one_time_keyboard=True
+            ))
 
-    if "/cancel" in limit_r.text:
-        return await limit_r.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+        if _cancel(limit_r.text):
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+        if _undo(limit_r.text):
+            # redo batch mode
+            batch_r3 = await _ask(bot, user_id,
+                "<b>↩️ Redo — Step 6/7: Batch Mode</b>\n\nON or OFF?",
+                reply_markup=ReplyKeyboardMarkup(
+                    [[KeyboardButton("✅ ON")], [KeyboardButton("❌ OFF")], [CANCEL_BTN]],
+                    resize_keyboard=True, one_time_keyboard=True))
+            if _cancel(batch_r3.text):
+                return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+            batch_mode = "on" in batch_r3.text.lower()
+            continue
+        break
 
     max_size_mb     = 0
     max_duration_s  = 0
@@ -1377,7 +1508,7 @@ async def _create_job_flow(bot, user_id: int):
             try: max_size_mb = int(ltext)
             except Exception: pass
 
-    #  Save & Start 
+    # ── Save & Start ──────────────────────────────────────────────
     job_id = f"{user_id}-{int(time.time())}"
     job = {
         "job_id":             job_id,
@@ -1387,24 +1518,19 @@ async def _create_job_flow(bot, user_id: int):
         "from_chat":          from_chat,
         "from_title":         from_title,
         "from_thread":        from_thread,
-        # Primary destination
         "to_chat":            to_chat,
         "to_title":           to_title,
         "to_thread_id":       to_thread,
-        # Second destination (optional)
         "to_chat_2":          to_chat_2,
         "to_title_2":         to_title_2,
         "to_thread_id_2":     to_thread_2,
-        # Batch settings
         "batch_mode":         batch_mode,
         "batch_start_id":     batch_start_id,
         "batch_end_id":       batch_end_id,
         "batch_cursor":       batch_start_id,
         "batch_done":         False,
-        # Size limits
         "max_size_mb":        max_size_mb,
         "max_duration_secs":  max_duration_s,
-        # Runtime
         "status":             "running",
         "created":            int(time.time()),
         "forwarded":          0,
@@ -1413,7 +1539,6 @@ async def _create_job_flow(bot, user_id: int):
     await _save_job(job)
     _start_job_task(job_id, user_id)
 
-    # Build summary
     thread_lbl = f" → Topic <code>{to_thread}</code>" if to_thread else ""
     dest2_lbl  = f"\n<b>Dest 2:</b> {to_title_2}" + (f" → Topic <code>{to_thread_2}</code>" if to_thread_2 else "") if to_chat_2 else ""
     batch_lbl  = (f"\n<b>Batch:</b> ✅ ON — copying from ID {batch_start_id}"
@@ -1427,12 +1552,13 @@ async def _create_job_flow(bot, user_id: int):
     if not size_lbl:
         size_lbl = "\n<b>Size limit:</b> None"
 
+    kind = "Bot" if is_bot else "Userbot"
     await bot.send_message(
         user_id,
         f"<b>✅ Live Job Created & Started!</b>\n\n"
         f"🟢 <b>{from_title}</b> → <b>{to_title}</b>{thread_lbl}"
         f"{dest2_lbl}\n"
-        f"<b>Account:</b> {'»  Bot' if is_bot else '»  Userbot'}: {sel_acc.get('name','?')}\n"
+        f"<b>Account:</b> {kind}: {sel_acc.get('name','?')}\n"
         f"{batch_lbl}{size_lbl}\n"
         f"<b>Job ID:</b> <code>{job_id[-6:]}</code>\n\n"
         f"<i>Running in the background. Use /jobs to manage.</i>",

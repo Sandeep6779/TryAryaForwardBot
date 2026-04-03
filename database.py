@@ -373,6 +373,7 @@ class Database:
             'keywords': None,
             'protect': None,
             'button': None,
+            'menu_image_id': None,
             'db_uri': None,
             'duration': 0,
             'filters': {

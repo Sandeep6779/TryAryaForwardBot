@@ -10,25 +10,33 @@ from pyrogram import Client, filters, enums, __version__ as pyrogram_version
 from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaDocument
 
 
+
+async def _safe_edit(bot, query, **kwargs):
+    if getattr(query.message, 'photo', None):
+        await query.message.delete()
+        kwargs['chat_id'] = query.message.chat.id
+        return await bot.send_message(**kwargs)
+    else:
+        return await query.message.edit_text(**kwargs)
+
 async def _main_buttons(user_id: int):
     lang = await db.get_language(user_id)
     return [
-        [InlineKeyboardButton('📢 Main Channel',   url='https://t.me/MeJeetX')],
-        [
-            InlineKeyboardButton('💬 Support Group', url='https://t.me/+1p2hcQ4ZaupjNjI1'),
-            InlineKeyboardButton('🔔 Status',         callback_data='status'),
-        ],
-        [
-            InlineKeyboardButton(_tx(lang, 'btn_help'),  callback_data='help'),
-            InlineKeyboardButton(_tx(lang, 'btn_about'), callback_data='about'),
-        ],
         [
             InlineKeyboardButton(_tx(lang, 'btn_settings'), callback_data='settings#main'),
             InlineKeyboardButton(_tx(lang, 'btn_jobs'),     callback_data='job#list'),
         ],
         [
             InlineKeyboardButton('»  Mᴜʟᴛɪ Jᴏʙ',    callback_data='mj#list'),
+            InlineKeyboardButton('»  Mᴇʀɢᴇʀ Jᴏʙ',   callback_data='mg#main'),
+        ],
+        [
+            InlineKeyboardButton('»  Cʟᴇᴀɴ MSG',    callback_data='settings#cleanmsg'),
             InlineKeyboardButton('»  Bᴀᴛᴄʜ Lɪɴᴋs',  callback_data='sl#start'),
+        ],
+        [
+            InlineKeyboardButton('Sᴛᴀᴛᴜs',         callback_data='status'),
+            InlineKeyboardButton('Aʙᴏᴜᴛ',           callback_data='about'),
         ],
     ]
 
@@ -37,11 +45,6 @@ _STATIC_BUTTONS = [
     [InlineKeyboardButton('📢 Main Channel',   url='https://t.me/MeJeetX')],
     [
         InlineKeyboardButton('💬 Support Group', url='https://t.me/+1p2hcQ4ZaupjNjI1'),
-        InlineKeyboardButton('🔔 Status',         callback_data='status'),
-    ],
-    [
-        InlineKeyboardButton('🙋 Help',  callback_data='help'),
-        InlineKeyboardButton('💁 About', callback_data='about'),
     ],
     [
         InlineKeyboardButton('⚙️ Settings', callback_data='settings#main'),
@@ -50,6 +53,10 @@ _STATIC_BUTTONS = [
     [
         InlineKeyboardButton('»  Mᴜʟᴛɪ Jᴏʙ',   callback_data='mj#list'),
         InlineKeyboardButton('»  Bᴀᴛᴄʜ Lɪɴᴋs', callback_data='sl#start'),
+    ],
+    [
+        InlineKeyboardButton('Sᴛᴀᴛᴜs',         callback_data='status'),
+        InlineKeyboardButton('Aʙᴏᴜᴛ',           callback_data='about'),
     ],
 ]
 
@@ -75,12 +82,27 @@ async def start(client, message):
         await resume_multi_jobs(user.id)
     except Exception:
         pass
+    configs = await db.get_configs(user.id)
+    menu_image_id = configs.get('menu_image_id')
     btns = await _main_buttons(user.id)
-    await client.send_message(
-        chat_id=message.chat.id,
-        reply_markup=InlineKeyboardMarkup(btns),
-        text=await t(user.id, 'START_TXT', user.first_name),
-    )
+
+    full_name = f"{user.first_name} {user.last_name}" if getattr(user, 'last_name', None) else user.first_name
+    txt = await t(user.id, 'START_TXT', user.id, full_name)
+    markup = InlineKeyboardMarkup(btns)
+
+    if menu_image_id:
+        await client.send_photo(
+            chat_id=message.chat.id,
+            photo=menu_image_id,
+            caption=txt,
+            reply_markup=markup,
+        )
+    else:
+        await client.send_message(
+            chat_id=message.chat.id,
+            reply_markup=markup,
+            text=txt,
+        )
 
 # ==================Restart Function==================
 
@@ -97,7 +119,7 @@ async def restart(client, message):
 async def helpcb(bot, query):
     user_id = query.from_user.id
     lang = await db.get_language(user_id)
-    await query.message.edit_text(
+    await _safe_edit(bot, query, 
         text=_tx(lang, 'HELP_TXT'),
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton('ʜᴏᴡ ᴛᴏ ᴜꜱᴇ ᴍᴇ » ', callback_data='how_to_use')],
@@ -110,7 +132,7 @@ async def helpcb(bot, query):
 async def how_to_use(bot, query):
     user_id = query.from_user.id
     lang = await db.get_language(user_id)
-    await query.message.edit_text(
+    await _safe_edit(bot, query, 
         text=_tx(lang, 'HOW_USE_TXT'),
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data='help')]]),
         disable_web_page_preview=True,
@@ -119,11 +141,26 @@ async def how_to_use(bot, query):
 @Client.on_callback_query(filters.regex(r'^back'))
 async def back(bot, query):
     user_id = query.from_user.id
+    configs = await db.get_configs(user_id)
+    menu_image_id = configs.get('menu_image_id')
     btns = await _main_buttons(user_id)
-    await query.message.edit_text(
-        reply_markup=InlineKeyboardMarkup(btns),
-        text=await t(user_id, 'START_TXT', query.from_user.first_name),
-    )
+    
+    full_name = f"{query.from_user.first_name} {query.from_user.last_name}" if getattr(query.from_user, 'last_name', None) else query.from_user.first_name
+    txt = await t(user_id, 'START_TXT', user_id, full_name)
+    markup = InlineKeyboardMarkup(btns)
+
+    if menu_image_id:
+        if getattr(query.message, "photo", None):
+            await query.message.edit_caption(caption=txt, reply_markup=markup)
+        else:
+            await query.message.delete()
+            await bot.send_photo(chat_id=query.message.chat.id, photo=menu_image_id, caption=txt, reply_markup=markup)
+    else:
+        if getattr(query.message, "photo", None):
+            await query.message.delete()
+            await bot.send_message(chat_id=query.message.chat.id, text=txt, reply_markup=markup)
+        else:
+            await query.message.edit_text(text=txt, reply_markup=markup, disable_web_page_preview=True)
 
 def get_bot_version():
     try:
@@ -195,11 +232,16 @@ def get_whats_new():
 async def about(bot, query):
     user_id = query.from_user.id
     lang = await db.get_language(user_id)
-    await query.message.edit_text(
+    await _safe_edit(bot, query, 
         text=_tx(lang, 'ABOUT_TXT', python_version=python_version(), bot_version=get_bot_version()),
         reply_markup=InlineKeyboardMarkup([
+            [InlineKeyboardButton('📢 Mᴀɪɴ Cʜᴀɴɴᴇʟ',   url='https://t.me/MeJeetX')],
+            [
+                InlineKeyboardButton('💬 Sᴜᴘᴘᴏʀᴛ Gʀᴏᴜᴘ', url='https://t.me/+1p2hcQ4ZaupjNjI1'),
+                InlineKeyboardButton('🙋 Hᴇʟᴘ',  callback_data='help'),
+            ],
             [InlineKeyboardButton('»  ᴡʜᴀᴛ\'s Nᴇᴡ', callback_data='whatsnew')],
-            [InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data='back')]
+            [InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='back')]
         ]),
         disable_web_page_preview=True,
         parse_mode=enums.ParseMode.HTML,
@@ -208,7 +250,7 @@ async def about(bot, query):
 @Client.on_callback_query(filters.regex(r'^whatsnew'))
 async def whats_new(bot, query):
     text = f"<b><u>»  WHAT'S NEW (Latest Updates)</u></b>\n\n{get_whats_new()}"
-    await query.message.edit_text(
+    await _safe_edit(bot, query, 
         text=text,
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data='about')]]),
         disable_web_page_preview=True,
@@ -290,7 +332,7 @@ async def status(bot, query):
         'uptime': uptime
     }
 
-    await query.message.edit_text(
+    await _safe_edit(bot, query, 
         text=_tx(lang, 'STATUS_TXT', **kwargs),
         reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data='back')]]),
         parse_mode=enums.ParseMode.HTML,

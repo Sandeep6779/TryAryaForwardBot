@@ -55,25 +55,25 @@ async def _sb_set_text_flow(bot, user_id, query, b_id: str, key: str,
         await resp.delete()
         if txt.strip().lower() in ("/cancel", "cancel"):
             return await ask.edit_text(
-                "»  Cancelled.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=back_cb)]])
+                "<i>Process Cancelled Successfully!</i>",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=back_cb)]])
             )
         if txt.strip() == "/reset":
             await db.set_share_bot_text(b_id, key, "")
             return await ask.edit_text(
                 f"»  {label} reset to default.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=back_cb)]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=back_cb)]])
             )
         await db.set_share_bot_text(b_id, key, txt)
         await ask.edit_text(
             f"»  {label} saved!",
-            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=back_cb)]])
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=back_cb)]])
         )
     except asyncio.TimeoutError:
         try:
             await ask.edit_text(
                 "Timeout.",
-                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=back_cb)]])
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=back_cb)]])
             )
         except Exception:
             pass
@@ -92,13 +92,17 @@ async def settings(client, message):
 async def settings_query(bot, query):
   user_id = query.from_user.id
   i, type = query.data.split("#")
-  buttons = [[InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data="settings#main")]]
+  buttons = [[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#main")]]
   
   if type=="main":
      user_id = query.from_user.id
-     await query.message.edit_text(
-       await t(user_id, 'settings_title'),
-       reply_markup=await main_buttons(user_id))
+     text = await t(user_id, 'settings_title')
+     markup = await main_buttons(user_id)
+     if getattr(query.message, "photo", None):
+         await query.message.delete()
+         await bot.send_message(chat_id=query.message.chat.id, text=text, reply_markup=markup)
+     else:
+         await query.message.edit_text(text, reply_markup=markup)
           
   elif type=="accounts":
      bots = await db.get_bots(user_id)
@@ -108,22 +112,22 @@ async def settings_query(bot, query):
      buttons = []
      
      # ---- BOTS SECTION ----
-     buttons.append([InlineKeyboardButton("    🤖 ʙᴏᴛꜱ    ", callback_data="settings#noop")])
+     buttons.append([InlineKeyboardButton("Bᴏᴛs", callback_data="settings#noop")])
      for b in normal_bots:
-         active_mark = "✔️ " if b.get('active') else " "
-         buttons.append([InlineKeyboardButton(f"{active_mark} {b['name']}", callback_data=f"settings#editbot_{b['id']}")])
+         active_mark = "" if b.get('active') else ""
+         buttons.append([InlineKeyboardButton(f"{active_mark}{b['name']}", callback_data=f"settings#editbot_{b['id']}")])
      if len(normal_bots) < 2:
-         buttons.append([InlineKeyboardButton('➕ ᴀᴅᴅ ʙᴏᴛ', callback_data="settings#addbot")])
+         buttons.append([InlineKeyboardButton('Aᴅᴅ Bᴏᴛ', callback_data="settings#addbot")])
 
      # ---- USERBOTS SECTION ----
-     buttons.append([InlineKeyboardButton("    👤 ᴜꜱᴇʀʙᴏᴛꜱ    ", callback_data="settings#noop")])
+     buttons.append([InlineKeyboardButton("Usᴇʀʙᴏᴛs", callback_data="settings#noop")])
      for b in userbots:
-         active_mark = "✔️ " if b.get('active') else " "
-         buttons.append([InlineKeyboardButton(f"{active_mark} {b['name']}", callback_data=f"settings#editbot_{b['id']}")])
+         active_mark = "" if b.get('active') else ""
+         buttons.append([InlineKeyboardButton(f"{active_mark}{b['name']}", callback_data=f"settings#editbot_{b['id']}")])
      if len(userbots) < 2:
-         buttons.append([InlineKeyboardButton('➕ ᴀᴅᴅ ᴜꜱᴇʀʙᴏᴛ', callback_data="settings#adduserbot")])
+         buttons.append([InlineKeyboardButton('Aᴅᴅ Usᴇʀʙᴏᴛ', callback_data="settings#adduserbot")])
          
-     buttons.append([InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data="settings#main")])
+     buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#main")])
      
      text = (
          "<b><u>👥 My Accounts</u></b>\n\n"
@@ -134,6 +138,41 @@ async def settings_query(bot, query):
      )
      await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup(buttons))
      
+  elif type=="main_menu_img":
+     await query.message.delete()
+     ask = await bot.send_message(
+         user_id,
+         "<b>🖼 Set Main Menu Image</b>\n\n"
+         "Send a photo to use as the Main Menu Image.\n"
+         "Send <code>/clear</code> to remove the current image.\n"
+         "Send <code>/cancel</code> to abort."
+     )
+     try:
+         resp = await bot.listen(chat_id=user_id, timeout=120)
+         if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
+             await resp.delete()
+             return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")]]))
+
+         if getattr(resp, "text", None) and resp.text.strip() == "/clear":
+             cfgs = await db.get_configs(user_id)
+             cfgs['menu_image_id'] = None
+             await db.update_configs(user_id, cfgs)
+             await resp.delete()
+             return await ask.edit_text("»  Main Menu image removed.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")]]))
+
+         photo = resp.photo
+         if not photo:
+             await resp.delete()
+             return await ask.edit_text("‣  No photo received. Please send an image.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")]]))
+
+         cfgs = await db.get_configs(user_id)
+         cfgs['menu_image_id'] = photo.file_id
+         await db.update_configs(user_id, cfgs)
+         await resp.delete()
+         await ask.edit_text("»  ✅ Main Menu image configured successfully!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")]]))
+     except asyncio.TimeoutError:
+         await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")]]))
+
   elif type=="noop":
      await query.answer()
   
@@ -159,9 +198,9 @@ async def settings_query(bot, query):
      for channel in channels:
         buttons.append([InlineKeyboardButton(f"{channel['title']}",
                          callback_data=f"settings#editchannels_{channel['chat_id']}")])
-     buttons.append([InlineKeyboardButton('»  ᴀᴅᴅ ᴄʜᴀɴɴᴇʟ » ', 
+     buttons.append([InlineKeyboardButton('Aᴅᴅ Cʜᴀɴɴᴇʟ', 
                       callback_data="settings#addchannel")])
-     buttons.append([InlineKeyboardButton('«  ʙᴀᴄᴋ', 
+     buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', 
                       callback_data="settings#main")])
      await query.message.edit_text( 
        "<b><u>My Channels</b></u>\n\n<b>you can manage your target chats in here</b>",
@@ -172,7 +211,7 @@ async def settings_query(bot, query):
      try:
          text = await bot.send_message(user_id, "<b>❪ ADD CHAT ❫\n\nForward a message from the chat, OR send its Chat ID (e.g. -100...), OR send a link to any message in the chat.\n/cancel - cancel this process</b>")
          chat_ids = await _ask(bot, user_id, timeout=300)
-         if chat_ids.text == "/cancel":
+         if getattr(chat_ids, 'text', None) and any(x in chat_ids.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
              await chat_ids.delete()
              return await text.edit_text("<b>process canceled</b>", reply_markup=InlineKeyboardMarkup(buttons))
              
@@ -227,10 +266,10 @@ async def settings_query(bot, query):
      TEXT = Translation.BOT_DETAILS if bott.get('is_bot', True) else Translation.USER_DETAILS
      buttons = []
      if not bott.get('active'):
-         buttons.append([InlineKeyboardButton('»  ꜱᴇᴛ ᴀᴄᴛɪᴠᴇ', callback_data=f"settings#setactive_{bott['id']}")])
+         buttons.append([InlineKeyboardButton('Sᴇᴛ Aᴄᴛɪᴠᴇ', callback_data=f"settings#setactive_{bott['id']}")])
          
-     buttons.append([InlineKeyboardButton('‣  ʀᴇᴍᴏᴠᴇ ‣ ', callback_data=f"settings#removebot_{bott['id']}")])
-     buttons.append([InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data="settings#accounts")])
+     buttons.append([InlineKeyboardButton('Rᴇᴍᴏᴠᴇ', callback_data=f"settings#removebot_{bott['id']}")])
+     buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#accounts")])
      await query.message.edit_text(
         TEXT.format(bott['name'], bott['id'], bott['username']),
         reply_markup=InlineKeyboardMarkup(buttons))
@@ -239,7 +278,7 @@ async def settings_query(bot, query):
      bot_id = type.split('_')[1]
      await db.set_active_bot(user_id, bot_id)
      await query.answer("Account set as ACTIVE!", show_alert=True)
-     buttons = [[InlineKeyboardButton('«  ʙᴀᴄᴋ ᴛᴏ ᴀᴄᴄᴏᴜɴᴛꜱ', callback_data="settings#accounts")]]
+     buttons = [[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#accounts")]]
      await query.message.edit_text("<b>Successfully changed active account.</b>", reply_markup=InlineKeyboardMarkup(buttons))
 
   elif type == "sharebot":
@@ -248,13 +287,13 @@ async def settings_query(bot, query):
      ptxt = "»  ON" if protect else "‣  OFF"
      
      buttons = []
-     buttons.append([InlineKeyboardButton(f"🛡 Pʀᴏᴛᴇᴄᴛɪᴏɴ: {ptxt}", callback_data="settings#sharebotprotect")])
-     buttons.append([InlineKeyboardButton("    »  ᴅᴇʟɪᴠᴇʀʏ ʙᴏᴛꜱ    ", callback_data="settings#noop")])
+     buttons.append([InlineKeyboardButton(f"Pʀᴏᴛᴇᴄᴛɪᴏɴ:{ptxt}", callback_data="settings#sharebotprotect")])
+     buttons.append([InlineKeyboardButton("Dᴇʟɪᴠᴇʀʏ Bᴏᴛs", callback_data="settings#noop")])
      for b in bots:
-         buttons.append([InlineKeyboardButton(f"»  {b['name']}", callback_data=f"settings#sb_view_{b['id']}")])
+         buttons.append([InlineKeyboardButton(f"{b['name']}", callback_data=f"settings#sb_view_{b['id']}")])
      if len(bots) < 10:
-         buttons.append([InlineKeyboardButton('»  ᴀᴅᴅ ꜱʜᴀʀᴇ ʙᴏᴛ » ', callback_data="settings#sb_add")])
-     buttons.append([InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data="settings#main")])
+         buttons.append([InlineKeyboardButton('Aᴅᴅ Sʜᴀʀᴇ Bᴏᴛ', callback_data="settings#sb_add")])
+     buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#main")])
      
      text = (
          "<b>❪ SHARE BOT CONFIGURATION ❫</b>\n\n"
@@ -276,12 +315,12 @@ async def settings_query(bot, query):
   elif type == "sbt_manage":
       bots = await db.get_share_bots()
       buttons = []
-      buttons.append([InlineKeyboardButton("    »  ᴅᴇʟɪᴠᴇʀʏ ʙᴏᴛꜱ    ", callback_data="settings#noop")])
+      buttons.append([InlineKeyboardButton("Dᴇʟɪᴠᴇʀʏ Bᴏᴛs", callback_data="settings#noop")])
       for b in bots:
-          buttons.append([InlineKeyboardButton(f"»  {b['name']}", callback_data=f"settings#sb_view_{b['id']}")])
+          buttons.append([InlineKeyboardButton(f"{b['name']}", callback_data=f"settings#sb_view_{b['id']}")])
       if len(bots) < 10:
-          buttons.append([InlineKeyboardButton('»  ᴀᴅᴅ ꜱʜᴀʀᴇ ʙᴏᴛ » ', callback_data="settings#sb_add")])
-      buttons.append([InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data="settings#sharebot")])
+          buttons.append([InlineKeyboardButton('Aᴅᴅ Sʜᴀʀᴇ Bᴏᴛ', callback_data="settings#sb_add")])
+      buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#sharebot")])
       
       text = (
           "<b><u>»  Share Agent Accounts</u></b>\n\n"
@@ -302,11 +341,11 @@ async def settings_query(bot, query):
               "/cancel to abort"
           )
           resp = await bot.listen(chat_id=user_id, timeout=120)
-          if resp.text and resp.text.strip() == "/cancel":
+          if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               await resp.delete()
               return await ask.edit_text(
-                  "<b>Cancelled.</b>",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#sharebot")]])
+                  "<i>Process Cancelled Successfully!</i>",
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharebot")]])
               )
 
           raw = (resp.text or "").strip()
@@ -319,7 +358,7 @@ async def settings_query(bot, query):
           if ":" not in tk or len(tk) < 40:
               return await ask.edit_text(
                   "<b>‣  Invalid token format!</b>\nMake sure you send the full token from @BotFather.",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʀᴇᴛʀʏ", callback_data="settings#sb_add"), InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#sharebot")]])
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Rᴇᴛʀʏ", callback_data="settings#sb_add"), InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharebot")]])
               )
 
           # Validate token by starting a temp client
@@ -341,13 +380,13 @@ async def settings_query(bot, query):
 
           await ask.edit_text(
               f"»  <b>Successfully added @{me.username}!</b>\n\nThe delivery bot is now active.",
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#sharebot")]])
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharebot")]])
           )
       except Exception as e:
           errmsg = f"‣  <b>Error:</b> <code>{e}</code>"
           try:
               if ask:
-                  await ask.edit_text(errmsg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#sharebot")]]))
+                  await ask.edit_text(errmsg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharebot")]]))
               else:
                   await bot.send_message(user_id, errmsg)
           except Exception:
@@ -362,23 +401,23 @@ async def settings_query(bot, query):
       buttons = [
           # ─── Welcome & About (grouped) ───────────────────────────
           [
-              InlineKeyboardButton('»  ᴡᴇʟᴄᴏᴍᴇ & ᴀʙᴏᴜᴛ', callback_data=f"settings#sb_wa_{b_id}"),
+              InlineKeyboardButton('Wᴇʟᴄᴏᴍᴇ & Aʙᴏᴜᴛ', callback_data=f"settings#sb_wa_{b_id}"),
           ],
           # ─── Other messages ───────────────────────────────────────
           [
-              InlineKeyboardButton('»  ᴅᴇʟᴇᴛᴇ ᴍꜱɢ',      callback_data=f"settings#sb_set_delete_{b_id}"),
-              InlineKeyboardButton('»  ꜱᴜᴄᴄᴇꜱꜱ ᴍꜱɢ',    callback_data=f"settings#sb_set_success_{b_id}"),
+              InlineKeyboardButton('Dᴇʟᴇᴛᴇ Msɢ',      callback_data=f"settings#sb_set_delete_{b_id}"),
+              InlineKeyboardButton('Sᴜᴄᴄᴇss Msɢ',    callback_data=f"settings#sb_set_success_{b_id}"),
           ],
-          [InlineKeyboardButton('»  ᴄᴜꜱᴛᴏᴍ ᴄᴀᴘᴛɪᴏɴ',    callback_data=f"settings#sb_set_caption_{b_id}")],
+          [InlineKeyboardButton('Cᴜsᴛᴏᴍ Cᴀᴘᴛɪᴏɴ',    callback_data=f"settings#sb_set_caption_{b_id}")],
           # ─── Bot controls ─────────────────────────────────────────
-          [InlineKeyboardButton('»  Aᴜᴛᴏ-Dᴇʟᴇᴛᴇ', callback_data=f"settings#sb_set_autodel_{b_id}"),
-           InlineKeyboardButton('»  ꜰᴏʀᴄᴇ ꜱᴜʙꜱᴄʀɪʙᴇ',  callback_data=f"settings#sb_fsub_{b_id}")],
+          [InlineKeyboardButton('Aᴜᴛᴏ-Dᴇʟᴇᴛᴇ', callback_data=f"settings#sb_set_autodel_{b_id}"),
+           InlineKeyboardButton('Fᴏʀᴄᴇ Sᴜʙsᴄʀɪʙᴇ',  callback_data=f"settings#sb_fsub_{b_id}")],
           [
-              InlineKeyboardButton('»  ꜱᴛᴀᴛꜱ',           callback_data=f"settings#sb_stats_{b_id}"),
-              InlineKeyboardButton('»  ʙʀᴏᴀᴅᴄᴀꜱᴛ',       callback_data=f"settings#sb_broadcast_{b_id}")
+              InlineKeyboardButton('Sᴛᴀᴛs',           callback_data=f"settings#sb_stats_{b_id}"),
+              InlineKeyboardButton('Bʀᴏᴀᴅᴄᴀsᴛ',       callback_data=f"settings#sb_broadcast_{b_id}")
           ],
-          [InlineKeyboardButton('‣  ʀᴇᴍᴏᴠᴇ ʙᴏᴛ ‣ ',      callback_data=f"settings#sb_remove_{b_id}")],
-          [InlineKeyboardButton('«  ʙᴀᴄᴋ',               callback_data="settings#sharebot")],
+          [InlineKeyboardButton('Rᴇᴍᴏᴠᴇ Bᴏᴛ',      callback_data=f"settings#sb_remove_{b_id}")],
+          [InlineKeyboardButton('❮ Bᴀᴄᴋ',               callback_data="settings#sharebot")],
       ]
       await query.message.edit_text(
           f"<b>❪ SHARE BOT PROFILE ❫</b>\n\n"
@@ -393,16 +432,75 @@ async def settings_query(bot, query):
       b_id = type.split("sb_wa_")[1]
       buttons = [
           [
-              InlineKeyboardButton('»  ᴡᴇʟᴄᴏᴍᴇ ᴍꜱɢ',    callback_data=f"settings#sb_set_welcome_{b_id}"),
+              InlineKeyboardButton('Wᴇʟᴄᴏᴍᴇ Msɢ',    callback_data=f"settings#sb_set_welcome_{b_id}"),
           ],
-          [InlineKeyboardButton('‣  ᴀʙᴏᴜᴛ',        callback_data=f"settings#sb_about_{b_id}")],
-          [InlineKeyboardButton('🖼  ᴍᴇɴᴜ ɪᴍᴀɢᴇ',  callback_data=f"settings#sb_menu_img_{b_id}")],
-          [InlineKeyboardButton('«  ʙᴀᴄᴋ',         callback_data=f"settings#sb_view_{b_id}")],
+          [InlineKeyboardButton('Aʙᴏᴜᴛ',        callback_data=f"settings#sb_about_{b_id}")],
+          [InlineKeyboardButton('Mᴇɴᴜ Iᴍᴀɢᴇ',  callback_data=f"settings#sb_menu_mgr_{b_id}")],
+          [InlineKeyboardButton('❮ Bᴀᴄᴋ',         callback_data=f"settings#sb_view_{b_id}")],
       ]
       await query.message.edit_text(
           f"<b>❪ WELCOME, ABOUT & MENU ❫</b>\n\n"
           "Select what you want to configure for this bot:",
           reply_markup=InlineKeyboardMarkup(buttons)
+      )
+
+  elif type.startswith("sb_menu_mgr_"):
+      b_id = type.split("sb_menu_mgr_")[1]
+      about = await db.get_share_bot_about(b_id)
+      images = about.get('menu_image_ids', [])
+      
+      buttons = []
+      buttons.append([
+          InlineKeyboardButton('➕ Aᴅᴅ Iᴍᴀɢᴇ', callback_data=f"settings#sb_menu_img_{b_id}"),
+          InlineKeyboardButton('👁 Pʀᴇᴠɪᴇᴡ', callback_data=f"settings#sb_menu_pre_{b_id}")
+      ])
+      
+      img_btns = []
+      for idx, file_id in enumerate(images):
+          img_btns.append(InlineKeyboardButton(f'❌ Iᴍᴀɢᴇ {idx+1}', callback_data=f"settings#sb_menu_del_{b_id}_{idx}"))
+          if len(img_btns) == 2:
+              buttons.append(img_btns)
+              img_btns = []
+      if img_btns:
+          buttons.append(img_btns)
+          
+      buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data=f"settings#sb_wa_{b_id}")])
+      
+      await query.message.edit_text(
+          f"<b>❪ MENU IMAGES MANAGER ❫</b>\n\n"
+          f"You have <b>{len(images)}/10</b> images in rotation.\n"
+          f"These images will automatically rotate when a user starts your bot.",
+          reply_markup=InlineKeyboardMarkup(buttons)
+      )
+
+  elif type.startswith("sb_menu_del_"):
+      _, b_id, idx = type.split("sb_menu_del_")[1].partition("_")
+      idx = int(idx)
+      about = await db.get_share_bot_about(b_id)
+      images = about.get('menu_image_ids', [])
+      if 0 <= idx < len(images):
+          images.pop(idx)
+          about['menu_image_ids'] = images
+          await db.set_share_bot_about(b_id, about)
+      
+      query.data = f"settings#sb_menu_mgr_{b_id}"
+      return await settings_query(bot, query)
+
+  elif type.startswith("sb_menu_pre_"):
+      b_id = type.split("sb_menu_pre_")[1]
+      about = await db.get_share_bot_about(b_id)
+      images = about.get('menu_image_ids', [])
+      if not images:
+          return await query.answer("No images configured yet!", show_alert=True)
+      
+      import random
+      file_id = random.choice(images)
+      await query.message.delete()
+      await bot.send_photo(
+          chat_id=user_id,
+          photo=file_id,
+          caption="<b>👁 Preview of the rotating menu image.</b>",
+          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('❮ Bᴀᴄᴋ Tᴏ Mᴀɴᴀɢᴇʀ', callback_data=f"settings#sb_menu_mgr_{b_id}")]])
       )
 
   elif type.startswith("sb_menu_img_"):
@@ -413,27 +511,35 @@ async def settings_query(bot, query):
           "<b>🖼 Set Menu Image</b>\n\n"
           "Send a photo to use as the main Menu Image.\n"
           "This image will appear above the Welcome and About menus.\n\n"
-          "Send <code>/clear</code> to remove the current image.\n"
+          "Send <code>/clear</code> to remove all images.\n"
           "Send <code>/cancel</code> to abort."
       )
       try:
           resp = await bot.listen(chat_id=user_id, timeout=120)
 
-          if resp.text and resp.text.strip().lower() in ("/cancel", "cancel"):
+          if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               await resp.delete()
               return await ask.edit_text(
-                  "»  Cancelled.",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
+                  "<i>Process Cancelled Successfully!</i>",
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
               )
 
           if resp.text and resp.text.strip() == "/clear":
               about = await db.get_share_bot_about(b_id)
-              about.pop('menu_image_id', None)
+              about.pop('menu_image_ids', None)
               await db.set_share_bot_about(b_id, about)
               await resp.delete()
               return await ask.edit_text(
-                  "»  Menu image removed.",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
+                  "»  Menu images removed.",
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
+              )
+
+          about = await db.get_share_bot_about(b_id)
+          if len(about.get('menu_image_ids', [])) >= 10:
+              await resp.delete()
+              return await ask.edit_text(
+                  "<b>‣  Limit Reached:</b> You can only set up to 10 rotating menu images.\nSend <code>/clear</code> first to reset the list.",
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
               )
 
           photo = resp.photo
@@ -441,57 +547,64 @@ async def settings_query(bot, query):
               await resp.delete()
               return await ask.edit_text(
                   "‣  No photo received. Please send an image.",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
               )
 
-          # Robust method: download photo locally then upload from the delivery bot Client
-          import os
-          from plugins.share_bot import share_clients
-          sb_client = share_clients.get(str(b_id))
-          
           final_file_id = None
+          import os
+          from pyrogram import Client
+          from plugins.share_bot import share_clients
           
+          sb_client = share_clients.get(str(b_id))
+          should_stop = False
+          
+          if not sb_client:
+              bot_info = next((bx for bx in await db.get_bots(user_id) if str(bx['id']) == b_id), None)
+              if bot_info:
+                  try:
+                      sb_client = Client(name=f"tmp_{b_id}", bot_token=bot_info['token'], in_memory=True, api_id=Config.API_ID, api_hash=Config.API_HASH)
+                      await sb_client.start()
+                      should_stop = True
+                  except Exception:
+                      sb_client = None
+
           if sb_client:
               dl_path = await bot.download_media(photo)
               if dl_path:
                   try:
-                      # Uploading local file ensures valid file_id natively known to the delivery bot
-                      relay = await sb_client.send_photo(
-                          chat_id=user_id,
-                          photo=dl_path,
-                      )
+                      # Relay photo natively inside bot context!
+                      relay = await sb_client.send_photo(chat_id=user_id, photo=dl_path)
                       if relay and relay.photo:
                           final_file_id = relay.photo.file_id
-                      try:
-                          await relay.delete()
+                      try: await relay.delete()
                       except Exception: pass
-                  except Exception as relay_err:
-                      logger.warning(f"Menu image relay failed: {relay_err}")
-                      final_file_id = None
-                  
-                  try:
-                      os.remove(dl_path)
                   except Exception: pass
+                  try: os.remove(dl_path)
+                  except Exception: pass
+                  
+          if should_stop and sb_client:
+              try: await sb_client.stop()
+              except Exception: pass
 
           if not final_file_id:
                await ask.edit_text(
-                   "<b>‣  ERROR:</b> The Share Bot must be started and active to register a menu image. Make sure the bot is running.",
-                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
+                   "<b>‣  ERROR:</b> Failed to process image file securely. Ensure the bot token is active.",
+                   reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
                )
                return
 
           about = await db.get_share_bot_about(b_id)
-          about['menu_image_id'] = final_file_id
+          about.setdefault('menu_image_ids', []).append(final_file_id)
           await db.set_share_bot_about(b_id, about)
           await resp.delete()
           await ask.edit_text(
               "»  ✅ Menu image configured successfully!",
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
           )
       except asyncio.TimeoutError:
           await ask.edit_text(
               "Timeout.",
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_wa_{b_id}")]])
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_menu_mgr_{b_id}")]])
           )
 
   elif type.startswith("sb_set_welcome_"):
@@ -550,7 +663,7 @@ async def settings_query(bot, query):
           f"<b>»  SHARE BOT STATS</b>\n\n"
           f"<b>Total Users:</b> <code>{cnt}</code>\n\n"
           "<i>These are users who have opened or interacted with this specific bot.</i>",
-          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
+          reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
       )
 
   elif type.startswith("sb_broadcast_"):
@@ -569,12 +682,12 @@ async def settings_query(bot, query):
           resp = await _ask(bot, user_id, timeout=300)
           msg_to_send = resp.text or resp.caption or "media"
           
-          if getattr(resp, "text", "") and str(resp.text).strip() == "/cancel":
+          if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               await ask.delete()
               await resp.delete()
               return await bot.send_message(
-                  user_id, "<b>Cancelled.</b>",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
+                  user_id, "<i>Process Cancelled Successfully!</i>",
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
               )
               
           users = await db.get_share_bot_users(b_id)
@@ -582,7 +695,7 @@ async def settings_query(bot, query):
               await ask.delete()
               return await bot.send_message(
                   user_id, "<b>‣  No users found for this bot.</b>",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
               )
               
           from plugins.share_bot import share_clients
@@ -591,7 +704,7 @@ async def settings_query(bot, query):
               await ask.delete()
               return await bot.send_message(
                   user_id, "<b>‣  Delivery Bot is not running online.</b>",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
               )
               
           await ask.edit_text(
@@ -638,7 +751,7 @@ async def settings_query(bot, query):
                   f"<b>‣  Failed:</b> <code>{failed}</code>\n"
                   f"<b>🚫 Blocked:</b> <code>{blocked}</code>\n\n"
                   "<i>Use Arya font and styling.</i>",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=back_btn_data)]])
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=back_btn_data)]])
               )
               try:
                   await msg_obj.delete()
@@ -651,7 +764,7 @@ async def settings_query(bot, query):
           try:
               await bot.send_message(
                   user_id, "Timeout.",
-                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
+                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")]])
               )
           except Exception:
               pass
@@ -665,11 +778,11 @@ async def settings_query(bot, query):
       about = await db.get_share_bot_about(b_id)
       txt_set = "»  Custom" if about.get('custom_text') else "»  Default"
       btns = [
-          [InlineKeyboardButton('»  ᴇᴅɪᴛ ᴀʙᴏᴜᴛ ᴛᴇxᴛ',   callback_data=f"settings#sb_about_txt_{b_id}")],
-          [InlineKeyboardButton('»  ᴇᴅɪᴛ ᴏᴡɴᴇʀ',         callback_data=f"settings#sb_about_owner_{b_id}")],
-          [InlineKeyboardButton('»  ᴇᴅɪᴛ ᴠᴇʀꜱɪᴏɴ',       callback_data=f"settings#sb_about_ver_{b_id}")],
-          [InlineKeyboardButton('»  ʀᴇꜱᴇᴛ ᴛᴏ ᴅᴇꜰᴀᴜʟᴛ',    callback_data=f"settings#sb_about_reset_{b_id}")],
-          [InlineKeyboardButton('«  ʙᴀᴄᴋ',                callback_data=f"settings#sb_wa_{b_id}")],
+          [InlineKeyboardButton('Eᴅɪᴛ Aʙᴏᴜᴛ Tᴇxᴛ',   callback_data=f"settings#sb_about_txt_{b_id}")],
+          [InlineKeyboardButton('Eᴅɪᴛ Oᴡɴᴇʀ',         callback_data=f"settings#sb_about_owner_{b_id}")],
+          [InlineKeyboardButton('Eᴅɪᴛ Vᴇʀsɪᴏɴ',       callback_data=f"settings#sb_about_ver_{b_id}")],
+          [InlineKeyboardButton('Rᴇsᴇᴛ Tᴏ Dᴇꜰᴀᴜʟᴛ',    callback_data=f"settings#sb_about_reset_{b_id}")],
+          [InlineKeyboardButton('❮ Bᴀᴄᴋ',                callback_data=f"settings#sb_wa_{b_id}")],
       ]
       await query.message.edit_text(
           f"<b>‣  Aʙᴏᴜᴛ Sᴇᴄᴛɪᴏɴ — {bt['name']}</b>\n\n"
@@ -691,15 +804,15 @@ async def settings_query(bot, query):
       )
       try:
           resp = await bot.listen(chat_id=user_id, timeout=180)
-          if resp.text and resp.text.strip() == "/cancel":
-              return await ask.edit_text("Cancelled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
+              return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
           txt = resp.text or ""
           about = await db.get_share_bot_about(b_id)
           about['custom_text'] = txt
           await db.set_share_bot_about(b_id, about)
-          await ask.edit_text("»  About text saved!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("»  About text saved!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
       except asyncio.TimeoutError:
-          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
 
   elif type.startswith("sb_about_owner_"):
       b_id = type.split("sb_about_owner_")[1]
@@ -711,17 +824,17 @@ async def settings_query(bot, query):
       )
       try:
           resp = await bot.listen(chat_id=user_id, timeout=120)
-          if resp.text and resp.text.strip() == "/cancel":
-              return await ask.edit_text("Cancelled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
+              return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
           parts = (resp.text or "").split("|", 1)
           about = await db.get_share_bot_about(b_id)
           about['owner_name'] = parts[0].strip()
           if len(parts) > 1:
               about['owner_link'] = parts[1].strip()
           await db.set_share_bot_about(b_id, about)
-          await ask.edit_text("»  Owner updated!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("»  Owner updated!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
       except asyncio.TimeoutError:
-          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
 
   elif type.startswith("sb_about_ver_"):
       b_id = type.split("sb_about_ver_")[1]
@@ -731,14 +844,14 @@ async def settings_query(bot, query):
       )
       try:
           resp = await bot.listen(chat_id=user_id, timeout=60)
-          if resp.text and resp.text.strip() == "/cancel":
-              return await ask.edit_text("Cancelled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
+              return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
           about = await db.get_share_bot_about(b_id)
           about['version'] = (resp.text or "V1.0").strip()
           await db.set_share_bot_about(b_id, about)
-          await ask.edit_text("»  Version updated!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("»  Version updated!", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
       except asyncio.TimeoutError:
-          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
+          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_about_{b_id}")]]))
 
   elif type.startswith("sb_about_reset_"):
       b_id = type.split("sb_about_reset_")[1]
@@ -756,14 +869,14 @@ async def settings_query(bot, query):
           jr_lbl = " [JR]" if ch.get('join_request') else ""
           lines.append(f"{i+1}. {ch.get('title','?')}{jr_lbl}")
           btns.append([
-              InlineKeyboardButton(f"»  JR #{i+1}",  callback_data=f"settings#sb_fsub_jr_{b_id}_{i}"),
-              InlineKeyboardButton(f"‣  Del #{i+1}", callback_data=f"settings#sb_fsub_del_{b_id}_{i}"),
+              InlineKeyboardButton(f"Jʀ #{i+1}",  callback_data=f"settings#sb_fsub_jr_{b_id}_{i}"),
+              InlineKeyboardButton(f"Dᴇʟ #{i+1}", callback_data=f"settings#sb_fsub_del_{b_id}_{i}"),
           ])
       ch_list = "\n".join(lines) if lines else "None configured."
       if len(fsub_chs) < 6:
-          btns.append([InlineKeyboardButton("»  ᴀᴅᴅ ᴄʜᴀɴɴᴇʟ", callback_data=f"settings#sb_fsub_add_{b_id}")])
-      btns.append([InlineKeyboardButton("»  ꜱᴇᴛ ꜰꜱᴜʙ ᴍꜱɢ", callback_data=f"settings#sb_fsub_msg_{b_id}")])
-      btns.append([InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")])
+          btns.append([InlineKeyboardButton("Aᴅᴅ Cʜᴀɴɴᴇʟ", callback_data=f"settings#sb_fsub_add_{b_id}")])
+      btns.append([InlineKeyboardButton("Sᴇᴛ Fsᴜʙ Msɢ", callback_data=f"settings#sb_fsub_msg_{b_id}")])
+      btns.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_view_{b_id}")])
       await query.message.edit_text(
           f"<b>»  Force-Subscribe — Bot Specific</b>\n\n"
           f"Users must join ALL listed channels to receive files from this bot.\n"
@@ -823,9 +936,9 @@ async def settings_query(bot, query):
       )
       try:
           resp = await bot.listen(chat_id=user_id, timeout=120)
-          if resp.text.strip() == "/cancel":
+          if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
               await resp.delete()
-              return await ask.edit_text("Cancelled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_fsub_{b_id}")]]))
+              return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_fsub_{b_id}")]]))
           raw_id = resp.text.strip()
           await resp.delete()
           try:
@@ -836,7 +949,7 @@ async def settings_query(bot, query):
                   msg = "<b>‣  Cannot access this channel.</b>\nMake sure the Main Bot is admin."
               else:
                   msg = f"<b>‣  Error:</b> <code>{e}</code>"
-              return await ask.edit_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_fsub_{b_id}")]]))
+              return await ask.edit_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_fsub_{b_id}")]]))
           try:
               invite = await bot.export_chat_invite_link(ch_obj.id)
           except Exception:
@@ -851,9 +964,9 @@ async def settings_query(bot, query):
           await db.set_bot_fsub_channels(b_id, fsub_chs)
           await ask.edit_text(
               f"<b>»  Added: {ch_obj.title}</b>\n<i>Toggle JR to enable join-request mode.</i>",
-              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_fsub_{b_id}")]]))
+              reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_fsub_{b_id}")]]))
       except asyncio.TimeoutError:
-          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data=f"settings#sb_fsub_{b_id}")]]))
+          await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data=f"settings#sb_fsub_{b_id}")]]))
 
   elif type.startswith("sb_remove_"):
       b_id = type.split("sb_remove_")[1]
@@ -872,13 +985,13 @@ async def settings_query(bot, query):
          jr_lbl = " [JR]" if ch.get('join_request') else ""
          lines.append(f"{i+1}. {ch.get('title','?')}{jr_lbl}")
          btns.append([
-             InlineKeyboardButton(f"»  Toggle JR #{i+1}",  callback_data=f"settings#sharefsub_jr_{i}"),
-             InlineKeyboardButton(f"‣  Remove #{i+1}", callback_data=f"settings#sharefsub_del_{i}")
+             InlineKeyboardButton(f"Tᴏɢɢʟᴇ Jʀ #{i+1}",  callback_data=f"settings#sharefsub_jr_{i}"),
+             InlineKeyboardButton(f"Rᴇᴍᴏᴠᴇ #{i+1}", callback_data=f"settings#sharefsub_del_{i}")
          ])
      ch_list = "\n".join(lines) if lines else "None configured."
      if len(fsub_chs) < 6:
-         btns.append([InlineKeyboardButton("»  ᴀᴅᴅ ᴄʜᴀɴɴᴇʟ/ɢʀᴏᴜᴘ", callback_data="settings#sharefsub_add")])
-     btns.append([InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#sharebot")])
+         btns.append([InlineKeyboardButton("Aᴅᴅ Cʜᴀɴɴᴇʟ/Gʀᴏᴜᴘ", callback_data="settings#sharefsub_add")])
+     btns.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharebot")])
      await query.message.edit_text(
          f"<b>»  Force-Subscribe Channels</b>\n\n"
          f"Users must join ALL listed channels to receive files.\n"
@@ -900,9 +1013,9 @@ async def settings_query(bot, query):
              "/cancel to abort"
          )
          resp = await bot.listen(chat_id=user_id, timeout=120)
-         if resp.text.strip() == "/cancel":
+         if getattr(resp, "text", None) and any(x in str(resp.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
              await resp.delete()
-             return await ask.edit_text("Cancelled.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#sharefsub")]]))
+             return await ask.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharefsub")]]))
          raw_id = resp.text.strip()
          await resp.delete()
          try:
@@ -921,7 +1034,7 @@ async def settings_query(bot, query):
                  msg = f"<b>‣  Error:</b> <code>{e}</code>\nMake sure the Main Bot is an admin in that channel."
              return await ask.edit_text(
                  msg,
-                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#sharefsub")]])
+                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharefsub")]])
              )
          try:
              invite = await bot.export_chat_invite_link(ch_obj.id)
@@ -945,10 +1058,10 @@ async def settings_query(bot, query):
          await ask.edit_text(
              f"<b>»  Added: {ch_obj.title}</b>\n"
              f"<i>Use 'Toggle JR' to enable join-request mode for this channel.</i>",
-             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#sharefsub")]])
+             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharefsub")]])
          )
      except asyncio.TimeoutError:
-         try: await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#sharefsub")]]))
+         try: await ask.edit_text("Timeout.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#sharefsub")]]))
          except Exception: pass
 
   elif type.startswith("sharefsub_jr_"):
@@ -998,17 +1111,17 @@ async def settings_query(bot, query):
      try:
          txtmsg = await bot.send_message(user_id, "<b>Send the Bot Token for the File-Sharing Bot:</b>\n<i>(Get it from @BotFather)</i>\n\n/remove - to delete current token.\n/cancel - to abort.")
          resp = await bot.listen(chat_id=user_id, timeout=120)
-         if resp.text == "/cancel":
+         if getattr(resp, 'text', None) and any(x in resp.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
              await resp.delete()
-             return await txtmsg.edit_text("<b>Cancelled.</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data='settings#sharebot')]]))
+             return await txtmsg.edit_text("<i>Process Cancelled Successfully!</i>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='settings#sharebot')]]))
          if resp.text == "/remove":
              await resp.delete()
              await db.set_share_bot_token("")
-             return await txtmsg.edit_text("<b>Token Removed.</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data='settings#sharebot')]]))
+             return await txtmsg.edit_text("<b>Token Removed.</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='settings#sharebot')]]))
             
          bot_token = re.findall(r'\d{8,10}:[A-Za-z0-9_-]{35}', resp.text)
          if not bot_token:
-             return await txtmsg.edit_text("<b>Invalid Token Format.</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data='settings#sharebot')]]))
+             return await txtmsg.edit_text("<b>Invalid Token Format.</b>", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='settings#sharebot')]]))
          
          new_token = bot_token[0]
          await db.set_share_bot_token(new_token)
@@ -1021,9 +1134,9 @@ async def settings_query(bot, query):
              status = f"»  Saved securely, but failed to start stream:\n<code>{e}</code>"
              
          await resp.delete()
-         await txtmsg.edit_text(status, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data='settings#sharebot')]]))
+         await txtmsg.edit_text(status, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='settings#sharebot')]]))
      except asyncio.exceptions.TimeoutError:
-         try: await txtmsg.edit_text('Timeout.', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('«  ʙᴀᴄᴋ', callback_data='settings#sharebot')]]))
+         try: await txtmsg.edit_text('Timeout.', reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data='settings#sharebot')]]))
          except: pass
 
   elif type.startswith("removebot"):
@@ -1032,7 +1145,7 @@ async def settings_query(bot, query):
          await db.remove_bot(user_id, bot_id)
      else:
          await db.remove_bot(user_id)
-     buttons = [[InlineKeyboardButton('«  ʙᴀᴄᴋ ᴛᴏ ᴀᴄᴄᴏᴜɴᴛꜱ', callback_data="settings#accounts")]]
+     buttons = [[InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#accounts")]]
      await query.message.edit_text(
         "<b>successfully removed!</b>",
         reply_markup=InlineKeyboardMarkup(buttons))
@@ -1040,9 +1153,9 @@ async def settings_query(bot, query):
   elif type.startswith("editchannels"): 
      chat_id = type.split('_')[1]
      chat = await db.get_channel_details(user_id, chat_id)
-     buttons = [[InlineKeyboardButton('‣  ʀᴇᴍᴏᴠᴇ ‣ ', callback_data=f"settings#removechannel_{chat_id}")
+     buttons = [[InlineKeyboardButton('Rᴇᴍᴏᴠᴇ', callback_data=f"settings#removechannel_{chat_id}")
                ],
-               [InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data="settings#channels")]]
+               [InlineKeyboardButton('❮ Bᴀᴄᴋ', callback_data="settings#channels")]]
      await query.message.edit_text(
         f"<b><u>»  CHANNEL DETAILS</b></u>\n\n<b>- TITLE:</b> <code>{chat['title']}</code>\n<b>- CHANNEL ID: </b> <code>{chat['chat_id']}</code>\n<b>- USERNAME:</b> {chat['username']}",
         reply_markup=InlineKeyboardMarkup(buttons))
@@ -1070,7 +1183,7 @@ async def settings_query(bot, query):
      cap_lbl = "»  Add Custom Caption" if caption is None else "✏️ Edit Custom Caption"
 
      buttons = [[
-         InlineKeyboardButton("      ᴄᴀᴘᴛɪᴏɴ ᴍᴏᴅᴇ      ",
+         InlineKeyboardButton("Cᴀᴘᴛɪᴏɴ Mᴏᴅᴇ",
              callback_data="settings_#noop")
      ],[
          InlineKeyboardButton("»  ᴋᴇᴇᴘ ᴏʀɪɢɪɴᴀʟ" + (" ◀" if not rm_cap else ""),
@@ -1082,17 +1195,17 @@ async def settings_query(bot, query):
          InlineKeyboardButton("»  ᴡɪᴘᴇ ᴀʟʟ ᴄᴀᴘᴛɪᴏɴꜱ" + (" ◀" if rm_cap == 2 else ""),
              callback_data="settings#caption_mode-wipe"),
      ],[
-         InlineKeyboardButton("      ᴄᴜꜱᴛᴏᴍ ᴛᴇᴍᴘʟᴀᴛᴇ      ",
+         InlineKeyboardButton("Cᴜsᴛᴏᴍ Tᴇᴍᴘʟᴀᴛᴇ",
              callback_data="settings_#noop")
      ],[
          InlineKeyboardButton(cap_lbl, callback_data="settings#addcaption"),
      ]]
      if caption is not None:
          buttons.append([
-             InlineKeyboardButton("👁 ᴠɪᴇᴡ ᴛᴇᴍᴘʟᴀᴛᴇ",  callback_data="settings#seecaption"),
-             InlineKeyboardButton("»  ᴄʟᴇᴀʀ ᴛᴇᴍᴘʟᴀᴛᴇ", callback_data="settings#deletecaption"),
+             InlineKeyboardButton("Vɪᴇᴡ Tᴇᴍᴘʟᴀᴛᴇ",  callback_data="settings#seecaption"),
+             InlineKeyboardButton("Cʟᴇᴀʀ Tᴇᴍᴘʟᴀᴛᴇ", callback_data="settings#deletecaption"),
          ])
-     buttons.append([InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#main")])
+     buttons.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")])
 
      await query.message.edit_text(
          "<b><u>»  Caption Settings</u></b>\n\n"
@@ -1108,10 +1221,10 @@ async def settings_query(bot, query):
                                
   elif type=="seecaption":   
      data = await get_configs(user_id)
-     buttons = [[InlineKeyboardButton('🖋️ ᴇᴅɪᴛ ᴄᴀᴘᴛɪᴏɴ', 
+     buttons = [[InlineKeyboardButton('️ Eᴅɪᴛ Cᴀᴘᴛɪᴏɴ', 
                   callback_data="settings#addcaption")
                ],[
-               InlineKeyboardButton('«  ʙᴀᴄᴋ', 
+               InlineKeyboardButton('❮ Bᴀᴄᴋ', 
                  callback_data="settings#caption")]]
      await query.message.edit_text(
         f"<b><u>YOUR CUSTOM CAPTION</b></u>\n\n<code>{data['caption']}</code>",
@@ -1130,9 +1243,9 @@ async def settings_query(bot, query):
      ],[
          InlineKeyboardButton(("✅ " if rm_cap == 2 else "» ") + "ᴡɪᴘᴇ ᴀʟʟ ᴄᴀᴘᴛɪᴏɴꜱ", callback_data="settings#caption_mode-wipe"),
      ],[
-         InlineKeyboardButton("»  ᴀᴅᴅ ᴄᴜꜱᴛᴏᴍ ᴄᴀᴘᴛɪᴏɴ", callback_data="settings#addcaption"),
+         InlineKeyboardButton("Aᴅᴅ Cᴜsᴛᴏᴍ Cᴀᴘᴛɪᴏɴ", callback_data="settings#addcaption"),
      ],[
-         InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#main")
+         InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")
      ]]
      await query.message.edit_text(
          "<b><u>»  Caption Settings</u></b>\n\n<b>Template cleared successfully.</b>",
@@ -1162,7 +1275,7 @@ async def settings_query(bot, query):
          mode_lbl = "»  Keep Original  (active)"
      cap_lbl = "»  Add Custom Caption" if caption is None else "✏️ Edit Custom Caption"
      buttons = [[
-         InlineKeyboardButton("      ᴄᴀᴘᴛɪᴏɴ ᴍᴏᴅᴇ      ", callback_data="settings_#noop")
+         InlineKeyboardButton("Cᴀᴘᴛɪᴏɴ Mᴏᴅᴇ", callback_data="settings_#noop")
      ],[
          InlineKeyboardButton(("✅ " if not rm_cap else "» ") + "ᴋᴇᴇᴘ ᴏʀɪɢɪɴᴀʟ", callback_data="settings#caption_mode-off"),
      ],[
@@ -1170,16 +1283,16 @@ async def settings_query(bot, query):
      ],[
          InlineKeyboardButton(("✅ " if rm_cap == 2 else "» ") + "ᴡɪᴘᴇ ᴀʟʟ ᴄᴀᴘᴛɪᴏɴꜱ", callback_data="settings#caption_mode-wipe"),
      ],[
-         InlineKeyboardButton("      ᴄᴜꜱᴛᴏᴍ ᴛᴇᴍᴘʟᴀᴛᴇ      ", callback_data="settings_#noop")
+         InlineKeyboardButton("Cᴜsᴛᴏᴍ Tᴇᴍᴘʟᴀᴛᴇ", callback_data="settings_#noop")
      ],[
          InlineKeyboardButton(cap_lbl, callback_data="settings#addcaption"),
      ]]
      if caption is not None:
          buttons.append([
-             InlineKeyboardButton("👁 ᴠɪᴇᴡ ᴛᴇᴍᴘʟᴀᴛᴇ",  callback_data="settings#seecaption"),
-             InlineKeyboardButton("»  ᴄʟᴇᴀʀ ᴛᴇᴍᴘʟᴀᴛᴇ", callback_data="settings#deletecaption"),
+             InlineKeyboardButton("Vɪᴇᴡ Tᴇᴍᴘʟᴀᴛᴇ",  callback_data="settings#seecaption"),
+             InlineKeyboardButton("Cʟᴇᴀʀ Tᴇᴍᴘʟᴀᴛᴇ", callback_data="settings#deletecaption"),
          ])
-     buttons.append([InlineKeyboardButton("«  ʙᴀᴄᴋ", callback_data="settings#main")])
+     buttons.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")])
      await query.message.edit_text(
          "<b><u>»  Caption Settings</u></b>\n\n"
          f"<b>Current mode:</b> {mode_lbl}\n\n"
@@ -1196,7 +1309,7 @@ async def settings_query(bot, query):
      try:
          text = await bot.send_message(query.message.chat.id, "Send your custom caption\n/cancel - <code>cancel this process</code>")
          caption = await bot.listen(chat_id=user_id, timeout=300)
-         if caption.text=="/cancel":
+         if getattr(caption, 'text', None) and any(x in caption.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
             await caption.delete()
             return await text.edit_text(
                   "<b>process canceled !</b>",
@@ -1220,14 +1333,14 @@ async def settings_query(bot, query):
      buttons = []
      button = (await get_configs(user_id))['button']
      if button is None:
-        buttons.append([InlineKeyboardButton('»  ᴀᴅᴅ ʙᴜᴛᴛᴏɴ » ', 
+        buttons.append([InlineKeyboardButton('Aᴅᴅ Bᴜᴛᴛᴏɴ', 
                       callback_data="settings#addbutton")])
      else:
-        buttons.append([InlineKeyboardButton('👀 ꜱᴇᴇ ʙᴜᴛᴛᴏɴ', 
+        buttons.append([InlineKeyboardButton('Sᴇᴇ Bᴜᴛᴛᴏɴ', 
                       callback_data="settings#seebutton")])
-        buttons[-1].append(InlineKeyboardButton('»  ʀᴇᴍᴏᴠᴇ ʙᴜᴛᴛᴏɴ ', 
+        buttons[-1].append(InlineKeyboardButton('Rᴇᴍᴏᴠᴇ Bᴜᴛᴛᴏɴ', 
                       callback_data="settings#deletebutton"))
-     buttons.append([InlineKeyboardButton('«  ʙᴀᴄᴋ', 
+     buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', 
                       callback_data="settings#main")])
      await query.message.edit_text(
         "<b><u>CUSTOM BUTTON</b></u>\n\n<b>You can set a inline button to messages.</b>\n\n<b><u>FORMAT:</b></u>\n`[Forward bot][buttonurl:https://t.me/devgaganbot]`\n",
@@ -1252,7 +1365,7 @@ async def settings_query(bot, query):
   elif type=="seebutton":
       button = (await get_configs(user_id))['button']
       button = parse_buttons(button, markup=False)
-      button.append([InlineKeyboardButton("«  ʙᴀᴄᴋ", "settings#button")])
+      button.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", "settings#button")])
       await query.message.edit_text(
          "**YOUR CUSTOM BUTTON**",
          reply_markup=InlineKeyboardMarkup(button))
@@ -1267,14 +1380,14 @@ async def settings_query(bot, query):
      buttons = []
      db_uri = (await get_configs(user_id))['db_uri']
      if db_uri is None:
-        buttons.append([InlineKeyboardButton('»  ᴀᴅᴅ ᴜʀʟ » ', 
+        buttons.append([InlineKeyboardButton('Aᴅᴅ Uʀʟ', 
                       callback_data="settings#addurl")])
      else:
-        buttons.append([InlineKeyboardButton('👀 ꜱᴇᴇ ᴜʀʟ', 
+        buttons.append([InlineKeyboardButton('Sᴇᴇ Uʀʟ', 
                       callback_data="settings#seeurl")])
-        buttons[-1].append(InlineKeyboardButton('»  ʀᴇᴍᴏᴠᴇ ᴜʀʟ ', 
+        buttons[-1].append(InlineKeyboardButton('Rᴇᴍᴏᴠᴇ Uʀʟ', 
                       callback_data="settings#deleteurl"))
-     buttons.append([InlineKeyboardButton('«  ʙᴀᴄᴋ', 
+     buttons.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', 
                       callback_data="settings#main")])
      await query.message.edit_text(
         "<b><u>DATABASE</u>\n\nDatabase is required for store your duplicate messages permenant. other wise stored duplicate media may be disappeared when after bot restart.</b>",
@@ -1283,7 +1396,7 @@ async def settings_query(bot, query):
   elif type=="addurl":
      await query.message.delete()
      uri = await bot.ask(user_id, "<b>please send your mongodb url.</b>\n\n<i>get your Mongodb url from [here](https://mongodb.com)</i>", disable_web_page_preview=True)
-     if uri.text=="/cancel":
+     if getattr(uri, 'text', None) and any(x in uri.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
         return await uri.reply_text(
                   "<b>process canceled !</b>",
                   reply_markup=InlineKeyboardMarkup(buttons))
@@ -1339,7 +1452,7 @@ async def settings_query(bot, query):
   elif type == "set_duration":
     await query.message.delete()
     dur_msg = await bot.ask(user_id, text="**Please send your duration in seconds (between forwards):**")
-    if dur_msg.text == '/cancel':
+    if getattr(dur_msg, 'text', None) and any(x in dur_msg.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
        return await dur_msg.reply_text("<b>process canceled</b>", reply_markup=await next_filters_buttons(user_id))
     try:
         duration = int(dur_msg.text)
@@ -1377,7 +1490,7 @@ async def settings_query(bot, query):
   elif type == "add_extension":
     await query.message.delete() 
     ext = await bot.ask(user_id, text="**please send your extensions (seperete by space)**")
-    if ext.text == '/cancel':
+    if getattr(ext, 'text', None) and any(x in ext.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
        return await ext.reply_text(
                   "<b>process canceled</b>",
                   reply_markup=InlineKeyboardMarkup(buttons))
@@ -1396,9 +1509,9 @@ async def settings_query(bot, query):
   elif type == "get_extension":
     extensions = (await get_configs(user_id))['extension']
     btn = extract_btn(extensions)
-    btn.append([InlineKeyboardButton('»  ᴀᴅᴅ » ', 'settings#add_extension')])
-    btn.append([InlineKeyboardButton('ʀᴇᴍᴏᴠᴇ ᴀʟʟ', 'settings#rmve_all_extension')])
-    btn.append([InlineKeyboardButton('«  ʙᴀᴄᴋ', 'settings#main')])
+    btn.append([InlineKeyboardButton('Aᴅᴅ', 'settings#add_extension')])
+    btn.append([InlineKeyboardButton('Rᴇᴍᴏᴠᴇ Aʟʟ', 'settings#rmve_all_extension')])
+    btn.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', 'settings#main')])
     await query.message.edit_text(
         text='<b><u>EXTENSIONS</u></b>\n\n**Files with these extiontions will not forward**',
         reply_markup=InlineKeyboardMarkup(btn))
@@ -1410,7 +1523,7 @@ async def settings_query(bot, query):
   elif type == "add_keyword":
     await query.message.delete()
     ask = await bot.ask(user_id, text="**please send the keywords (seperete by space)**")
-    if ask.text == '/cancel':
+    if getattr(ask, 'text', None) and any(x in ask.text.lower() for x in ['cancel', 'cᴀɴᴄᴇʟ', '⛔']):
        return await ask.reply_text(
                   "<b>process canceled</b>",
                   reply_markup=InlineKeyboardMarkup(buttons))
@@ -1429,9 +1542,9 @@ async def settings_query(bot, query):
   elif type == "get_keyword":
     keywords = (await get_configs(user_id))['keywords']
     btn = extract_btn(keywords)
-    btn.append([InlineKeyboardButton('»  ᴀᴅᴅ » ', 'settings#add_keyword')])
-    btn.append([InlineKeyboardButton('ʀᴇᴍᴏᴠᴇ ᴀʟʟ', 'settings#rmve_all_keyword')])
-    btn.append([InlineKeyboardButton('«  ʙᴀᴄᴋ', 'settings#main')])
+    btn.append([InlineKeyboardButton('Aᴅᴅ', 'settings#add_keyword')])
+    btn.append([InlineKeyboardButton('Rᴇᴍᴏᴠᴇ Aʟʟ', 'settings#rmve_all_keyword')])
+    btn.append([InlineKeyboardButton('❮ Bᴀᴄᴋ', 'settings#main')])
     await query.message.edit_text(
         text='<b><u>KEYWORDS</u></b>\n\n**File with these keywords in file name will forwad**',
         reply_markup=InlineKeyboardMarkup(btn))
@@ -1469,57 +1582,57 @@ async def main_buttons(user_id=None):
   if mode == 'merger':
       #  MERGER MODE: Clean separate menu 
       buttons = [[
-           InlineKeyboardButton('🔀 ᴍᴇʀɢᴇʀ ᴍᴏᴅᴇ »   ⟶  ᴛᴀᴘ ᴛᴏ ꜱᴡɪᴛᴄʜ',
+           InlineKeyboardButton('Mᴇʀɢᴇʀ Mᴏᴅᴇ ⟶ Tᴀᴘ Tᴏ Sᴡɪᴛᴄʜ',
                         callback_data='settings#toggle_mode')
            ],[
-           InlineKeyboardButton('👥 ᴀᴄᴄᴏᴜɴᴛꜱ',
+           InlineKeyboardButton('Aᴄᴄᴏᴜɴᴛs',
                         callback_data='settings#accounts'),
-           InlineKeyboardButton('📢 ᴄʜᴀɴɴᴇʟꜱ',
+           InlineKeyboardButton('Cʜᴀɴɴᴇʟs',
                         callback_data='settings#channels')
            ],[
-           InlineKeyboardButton('🎵 ᴀᴜᴅɪᴏ ᴍᴇʀɢᴇ',
+           InlineKeyboardButton('Aᴜᴅɪᴏ Mᴇʀɢᴇ',
                         callback_data='mg#audio_list'),
-           InlineKeyboardButton('🎬 ᴠɪᴅᴇᴏ ᴍᴇʀɢᴇ',
+           InlineKeyboardButton('Vɪᴅᴇᴏ Mᴇʀɢᴇ',
                         callback_data='mg#video_list')
            ],[
-           InlineKeyboardButton('🤖 ꜱʜᴀʀᴇ ʟɪɴᴋ ʙᴏᴛ ꜱᴇᴛᴜᴘ',
+           InlineKeyboardButton('Bᴀᴛᴄʜ Lɪɴᴋs Bᴏᴛ Sᴇᴛᴜᴘ',
                         callback_data='settings#sharebot')
            ],[
-           InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data='back')
+           InlineKeyboardButton('❮ Bᴀᴄᴋ Tᴏ Mᴇɴᴜ', callback_data='back')
            ]]
   else:
       #  FORWARD MODE: Full original menu 
       buttons = [[
-           InlineKeyboardButton('↔️ ꜰᴏʀᴡᴀʀᴅ ᴍᴏᴅᴇ »   ⟶  ᴛᴀᴘ ᴛᴏ ꜱᴡɪᴛᴄʜ',
+           InlineKeyboardButton('↔️ Fᴏʀᴡᴀʀᴅ Mᴏᴅᴇ ⟶ Tᴀᴘ Tᴏ Sᴡɪᴛᴄʜ',
                         callback_data='settings#toggle_mode')
            ],[
-           InlineKeyboardButton('👥 ᴀᴄᴄᴏᴜɴᴛꜱ',
+           InlineKeyboardButton('Aᴄᴄᴏᴜɴᴛs',
                         callback_data='settings#accounts'),
-           InlineKeyboardButton('📢 ᴄʜᴀɴɴᴇʟꜱ',
+           InlineKeyboardButton('Cʜᴀɴɴᴇʟs',
                         callback_data='settings#channels')
            ],[
-           InlineKeyboardButton('📝 ᴄᴀᴘᴛɪᴏɴ',
+           InlineKeyboardButton('Cᴀᴘᴛɪᴏɴ',
                         callback_data='settings#caption'),
-           InlineKeyboardButton('🗄️ ᴍᴏɴɢᴏᴅʙ',
+           InlineKeyboardButton('️ Mᴏɴɢᴏᴅʙ',
                         callback_data='settings#database')
            ],[
-           InlineKeyboardButton('🎯 ꜰɪʟᴛᴇʀꜱ',
+           InlineKeyboardButton('Fɪʟᴛᴇʀs',
                         callback_data='settings#filters'),
-           InlineKeyboardButton('🖱️ ʙᴜᴛᴛᴏɴꜱ',
+           InlineKeyboardButton('️ Bᴜᴛᴛᴏɴs',
                         callback_data='settings#button')
            ],[
-           InlineKeyboardButton('🧬 ᴇxᴛʀᴀ ꜱᴇᴛᴛɪɴɢꜱ',
+           InlineKeyboardButton('Exᴛʀᴀ Sᴇᴛᴛɪɴɢs',
                         callback_data='settings#nextfilters'),
-           InlineKeyboardButton('🧹 ᴄʟᴇᴀɴ ᴍꜱɢ',
-                        callback_data='settings#cleanmsg')
-           ],[
-           InlineKeyboardButton('🌍 ʟᴀɴɢᴜᴀɢᴇ / भाषा',
+           InlineKeyboardButton('EN/हि',
                         callback_data='settings#lang')
            ],[
-           InlineKeyboardButton('🤖 ꜱʜᴀʀᴇ ʟɪɴᴋ ʙᴏᴛ ꜱᴇᴛᴜᴘ',
+           InlineKeyboardButton('Mᴀɪɴ Mᴇɴᴜ Iᴍᴀɢᴇ',
+                        callback_data='settings#main_menu_img')
+           ],[
+           InlineKeyboardButton('Bᴀᴛᴄʜ Lɪɴᴋs Bᴏᴛ Sᴇᴛᴜᴘ',
                         callback_data='settings#sharebot')
            ],[
-           InlineKeyboardButton('🔙 ʙᴀᴄᴋ', callback_data='back')
+           InlineKeyboardButton('❮ Bᴀᴄᴋ Tᴏ Mᴇɴᴜ', callback_data='back')
            ]]
   return InlineKeyboardMarkup(buttons)
 
@@ -1583,7 +1696,7 @@ def size_button(size):
        InlineKeyboardButton('-100',
                     callback_data=f'settings#update_size_-{size - 100}')
        ],[
-       InlineKeyboardButton('«  ʙᴀᴄᴋ',
+       InlineKeyboardButton('❮ Bᴀᴄᴋ',
                     callback_data="settings#main")
      ]]
   return InlineKeyboardMarkup(buttons)
@@ -1592,70 +1705,67 @@ async def filters_buttons(user_id):
   filter = await get_configs(user_id)
   filters = filter['filters']
   buttons = [[
-       InlineKeyboardButton('»  ꜰᴏʀᴡᴀʀᴅ ᴛᴀɢ',
+       InlineKeyboardButton('Fᴏʀᴡᴀʀᴅ Tᴀɢ',
                     callback_data=f'settings_#updatefilter-forward_tag-{filter["forward_tag"]}'),
-       InlineKeyboardButton('✅' if filter['forward_tag'] else '❌',
+       InlineKeyboardButton('[ ON ]' if filter['forward_tag'] else '[ OFF ]',
                     callback_data=f'settings#updatefilter-forward_tag-{filter["forward_tag"]}')
        ],[
-       InlineKeyboardButton('»  ᴛᴇxᴛꜱ',
+       InlineKeyboardButton('Tᴇxᴛs',
                     callback_data=f'settings_#updatefilter-text-{filters["text"]}'),
-       InlineKeyboardButton('✅' if filters['text'] else '❌',
+       InlineKeyboardButton('[ ON ]' if filters['text'] else '[ OFF ]',
                     callback_data=f'settings#updatefilter-text-{filters["text"]}')
        ],[
-       InlineKeyboardButton('»  ᴅᴏᴄᴜᴍᴇɴᴛꜱ',
+       InlineKeyboardButton('Dᴏᴄᴜᴍᴇɴᴛs',
                     callback_data=f'settings_#updatefilter-document-{filters["document"]}'),
-       InlineKeyboardButton('✅' if filters['document'] else '❌',
+       InlineKeyboardButton('[ ON ]' if filters['document'] else '[ OFF ]',
                     callback_data=f'settings#updatefilter-document-{filters["document"]}')
        ],[
-       InlineKeyboardButton('»  ᴠɪᴅᴇᴏꜱ',
+       InlineKeyboardButton('Vɪᴅᴇᴏs',
                     callback_data=f'settings_#updatefilter-video-{filters["video"]}'),
-       InlineKeyboardButton('✅' if filters['video'] else '❌',
+       InlineKeyboardButton('[ ON ]' if filters['video'] else '[ OFF ]',
                     callback_data=f'settings#updatefilter-video-{filters["video"]}')
        ],[
-       InlineKeyboardButton('»  ᴘʜᴏᴛᴏꜱ',
+       InlineKeyboardButton('Pʜᴏᴛᴏs',
                     callback_data=f'settings_#updatefilter-photo-{filters["photo"]}'),
-       InlineKeyboardButton('✅' if filters['photo'] else '❌',
+       InlineKeyboardButton('[ ON ]' if filters['photo'] else '[ OFF ]',
                     callback_data=f'settings#updatefilter-photo-{filters["photo"]}')
        ],[
-       InlineKeyboardButton('»  ᴀᴜᴅɪᴏꜱ',
+       InlineKeyboardButton('Aᴜᴅɪᴏs',
                     callback_data=f'settings_#updatefilter-audio-{filters["audio"]}'),
-       InlineKeyboardButton('✅' if filters['audio'] else '❌',
+       InlineKeyboardButton('[ ON ]' if filters['audio'] else '[ OFF ]',
                     callback_data=f'settings#updatefilter-audio-{filters["audio"]}')
        ],[
-       InlineKeyboardButton('»  ᴠᴏɪᴄᴇꜱ',
+       InlineKeyboardButton('Vᴏɪᴄᴇs',
                     callback_data=f'settings_#updatefilter-voice-{filters["voice"]}'),
-       InlineKeyboardButton('✅' if filters['voice'] else '❌',
+       InlineKeyboardButton('[ ON ]' if filters['voice'] else '[ OFF ]',
                     callback_data=f'settings#updatefilter-voice-{filters["voice"]}')
        ],[
-       InlineKeyboardButton('»  ᴀɴɪᴍᴀᴛɪᴏɴꜱ',
+       InlineKeyboardButton('Aɴɪᴍᴀᴛɪᴏɴs',
                     callback_data=f'settings_#updatefilter-animation-{filters["animation"]}'),
-       InlineKeyboardButton('✅' if filters['animation'] else '❌',
+       InlineKeyboardButton('[ ON ]' if filters['animation'] else '[ OFF ]',
                     callback_data=f'settings#updatefilter-animation-{filters["animation"]}')
        ],[
-       InlineKeyboardButton('»  ꜱᴛɪᴄᴋᴇʀꜱ',
+       InlineKeyboardButton('Sᴛɪᴄᴋᴇʀs',
                     callback_data=f'settings_#updatefilter-sticker-{filters["sticker"]}'),
-       InlineKeyboardButton('✅' if filters['sticker'] else '❌',
+       InlineKeyboardButton('[ ON ]' if filters['sticker'] else '[ OFF ]',
                     callback_data=f'settings#updatefilter-sticker-{filters["sticker"]}')
        ],[
-       InlineKeyboardButton('»  ꜱᴋɪᴘ ᴅᴜᴘʟɪᴄᴀᴛᴇ',
+       InlineKeyboardButton('Sᴋɪᴘ Dᴜᴘʟɪᴄᴀᴛᴇ',
                     callback_data=f'settings_#updatefilter-duplicate-{filter["duplicate"]}'),
-       InlineKeyboardButton('✅' if filter['duplicate'] else '❌',
+       InlineKeyboardButton('[ ON ]' if filter['duplicate'] else '[ OFF ]',
                     callback_data=f'settings#updatefilter-duplicate-{filter["duplicate"]}')
        ],[
-               InlineKeyboardButton('»  ᴄᴀᴘᴛɪᴏɴ ꜱᴇᴛᴛɪɴɢꜱ →',
+               InlineKeyboardButton('Cᴀᴘᴛɪᴏɴ Sᴇᴛᴛɪɴɢs →',
 
                      callback_data='settings#caption'),
 
         InlineKeyboardButton(
-
-            '» ' if filters.get('rm_caption', False) is True else (
-
-            '» ' if filters.get('rm_caption', False) == 2 else '» '),
-
+            '[ ON ]' if filters.get('rm_caption', False) is True else (
+            '[ OFF ]' if filters.get('rm_caption', False) == 2 else '[ OFF ]'),
                      callback_data='settings#caption')
 
         ],[
-       InlineKeyboardButton('⫷ ʙᴀᴄᴋ',
+       InlineKeyboardButton('❮ Bᴀᴄᴋ',
                     callback_data="settings#main")
        ]]
   return InlineKeyboardMarkup(buttons) 
@@ -1665,42 +1775,39 @@ async def next_filters_buttons(user_id):
   filters = filter['filters']
   links_on = filters.get('links', False)
   buttons = [[
-       InlineKeyboardButton('»  ᴘᴏʟʟ',
-                    callback_data=f'settings_#updatefilter-poll-{filters["poll"]}'),
-       InlineKeyboardButton('✅' if filters['poll'] else '❌',
-                    callback_data=f'settings#updatefilter-poll-{filters["poll"]}')
+       InlineKeyboardButton('Pᴏʟʟ',
+                    callback_data=f'settings_#updatefilter-poll-{filters.get("poll", True)}'),
+       InlineKeyboardButton('[ ON ]' if filters.get('poll', True) else '[ OFF ]',
+                    callback_data=f'settings#updatefilter-poll-{filters.get("poll", True)}')
        ],[
-       InlineKeyboardButton('»  ꜱᴇᴄᴜʀᴇ ᴍᴇꜱꜱᴀɢᴇ',
-                    callback_data=f'settings_#updatefilter-protect-{filter["protect"]}'),
-       InlineKeyboardButton('✅' if filter['protect'] else '❌',
-                    callback_data=f'settings#updatefilter-protect-{filter["protect"]}')
+       InlineKeyboardButton('Sᴇᴄᴜʀᴇ Mᴇssᴀɢᴇ',
+                    callback_data=f'settings_#updatefilter-protect-{filter.get("protect", False)}'),
+       InlineKeyboardButton('[ ON ]' if filter.get('protect', False) else '[ OFF ]',
+                    callback_data=f'settings#updatefilter-protect-{filter.get("protect", False)}')
        ],[
-       InlineKeyboardButton('»  ᴅᴏᴡɴʟᴏᴀᴅ ᴍᴏᴅᴇ',
-                    callback_data=f'settings_#updatefilter-download-{filter["download"]}'),
-       InlineKeyboardButton('✅' if filter.get('download') else '❌',
-                    callback_data=f'settings#updatefilter-download-{filter["download"]}')
+       InlineKeyboardButton('Dᴏᴡɴʟᴏᴀᴅ Mᴏᴅᴇ',
+                    callback_data=f'settings_#updatefilter-download-{filter.get("download", False)}'),
+       InlineKeyboardButton('[ ON ]' if filter.get('download', False) else '[ OFF ]',
+                    callback_data=f'settings#updatefilter-download-{filter.get("download", False)}')
        ],[
-       InlineKeyboardButton('»  ʟɪɴᴋꜱ',
+       InlineKeyboardButton('Lɪɴᴋs',
                     callback_data=f'settings_#updatefilter-links-{links_on}'),
-       InlineKeyboardButton('✅' if links_on else '❌',
+       InlineKeyboardButton('[ ON ]' if links_on else '[ OFF ]',
                     callback_data=f'settings#updatefilter-links-{links_on}')
        ],[
-       InlineKeyboardButton('🛑 ꜱɪᴢᴇ ʟɪᴍɪᴛ',
+       InlineKeyboardButton('Sɪᴢᴇ Lɪᴍɪᴛ',
                     callback_data='settings#file_size')
        ],[
-       InlineKeyboardButton('» ️ ꜱᴇᴛ ᴅᴜʀᴀᴛɪᴏɴ',
+       InlineKeyboardButton('️ Sᴇᴛ Dᴜʀᴀᴛɪᴏɴ',
                     callback_data='settings#set_duration')
        ],[
-       InlineKeyboardButton('»  ᴇxᴛᴇɴꜱɪᴏɴ',
+       InlineKeyboardButton('Exᴛᴇɴsɪᴏɴ',
                     callback_data='settings#get_extension')
        ],[
-       InlineKeyboardButton('♦️ ᴋᴇʏᴡᴏʀᴅꜱ ♦️',
+       InlineKeyboardButton('️ Kᴇʏᴡᴏʀᴅs ️',
                     callback_data='settings#get_keyword')
        ],[
-       InlineKeyboardButton('⫷ ʙᴀᴄᴋ', 
+       InlineKeyboardButton('❮ Bᴀᴄᴋ Tᴏ Mᴇɴᴜ', 
                     callback_data="settings#main")
        ]]
-  return InlineKeyboardMarkup(buttons) 
-   
-
-
+  return InlineKeyboardMarkup(buttons)

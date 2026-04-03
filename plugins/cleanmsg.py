@@ -232,15 +232,15 @@ async def _cleanmsg_flow(bot, user_id: int):
         label = "🤖 Bot" if acc.get('is_bot', True) else "👤 Userbot"
         name  = acc.get('username') or acc.get('name', 'Unknown')
         acc_buttons.append([KeyboardButton(f"{label}: {name} [{acc['id']}]")])
-    acc_buttons.append([KeyboardButton("/cancel")])
+    acc_buttons.append([KeyboardButton("⛔ Cᴀɴᴄᴇʟ")])
 
     acc_reply = await bot.ask(
         user_id,
         "<b>🗑 Clean MSG — Step 1/3</b>\n\nChoose which account to use for deletion:",
         reply_markup=ReplyKeyboardMarkup(acc_buttons, resize_keyboard=True, one_time_keyboard=True)
     )
-    if "/cancel" in acc_reply.text:
-        return await acc_reply.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+    if getattr(acc_reply, "text", None) and any(x in str(acc_reply.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
+        return await acc_reply.reply("<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
 
     sel_acc = None
     if "[" in acc_reply.text and "]" in acc_reply.text:
@@ -272,7 +272,7 @@ async def _cleanmsg_flow(bot, user_id: int):
             tick = "✅ " if ch['chat_id'] in selected_chats else "⬜ "
             ch_btns.append([KeyboardButton(f"{tick}{ch['title']}")])
         ch_btns.append([KeyboardButton("✔ All / Clear All")])
-        ch_btns.append([KeyboardButton("▶ Done"), KeyboardButton("/cancel")])
+        ch_btns.append([KeyboardButton("▶ Done"), KeyboardButton("⛔ Cᴀɴᴄᴇʟ")])
 
         hint = (
             f"\n\n<b>Selected ({len(selected_chats)}):</b> " +
@@ -288,7 +288,7 @@ async def _cleanmsg_flow(bot, user_id: int):
         txt = ch_reply.text.strip()
 
         if "/cancel" in txt:
-            return await ch_reply.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+            return await ch_reply.reply("<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
 
         if "Done" in txt or "▶" in txt:
             break
@@ -355,11 +355,11 @@ async def _cleanmsg_flow(bot, user_id: int):
             [KeyboardButton("🎞 Animation"),      KeyboardButton("🖍 Text Only")],
             [KeyboardButton("📦 All Media"),      KeyboardButton("🤖 Commands")],
             [KeyboardButton("🔗 Links")],
-            [KeyboardButton("/cancel")],
+            [KeyboardButton("⛔ Cᴀɴᴄᴇʟ")],
         ], resize_keyboard=True, one_time_keyboard=True)
     )
     if "/cancel" in (type_reply.text or ""):
-        return await type_reply.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+        return await type_reply.reply("<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
 
     type_map = {
         "All Messages": "all",    "All Media": "all_media",
@@ -382,11 +382,11 @@ async def _cleanmsg_flow(bot, user_id: int):
         reply_markup=ReplyKeyboardMarkup([
             [KeyboardButton("🌍 Entire Chat(s)")],
             [KeyboardButton("🔗 Custom Link Range (From-To)")],
-            [KeyboardButton("/cancel")]
+            [KeyboardButton("⛔ Cᴀɴᴄᴇʟ")]
         ], resize_keyboard=True, one_time_keyboard=True)
     )
     if "/cancel" in (range_reply.text or ""):
-        return await range_reply.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+        return await range_reply.reply("<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
         
     check_range = None
     if "Custom Link Range" in (range_reply.text or ""):
@@ -395,14 +395,16 @@ async def _cleanmsg_flow(bot, user_id: int):
             "Send the <b>FIRST message link</b> (from where deletion should start):",
             reply_markup=ReplyKeyboardRemove()
         )
-        if "/cancel" in msg_reply1.text: return await msg_reply1.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+        if getattr(msg_reply1, "text", None) and any(x in str(msg_reply1.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
+            return await msg_reply1.reply("<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
         chat_id_from, start_id = __parse_link(msg_reply1.text)
         
         msg_reply2 = await bot.ask(
             user_id,
             "Send the <b>LAST message link</b> (till where deletion should happen):"
         )
-        if "/cancel" in msg_reply2.text: return await msg_reply2.reply("<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+        if getattr(msg_reply2, "text", None) and any(x in str(msg_reply2.text).lower() for x in ["cancel", "cᴀɴᴄᴇʟ", "⛔", "/cancel"]):
+            return await msg_reply2.reply("<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
         chat_id_to, end_id = __parse_link(msg_reply2.text)
         
         if not chat_id_from or str(chat_id_from) != str(chat_id_to):
@@ -420,8 +422,8 @@ async def _cleanmsg_flow(bot, user_id: int):
     range_label = f"From ID <code>{start_id}</code> to <code>{end_id}</code>" if check_range else "Entire Chat(s)"
 
     confirm_markup = InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅ Yes, Delete!", callback_data="cleanmsg#confirm"),
-        InlineKeyboardButton("❌ Cancel",       callback_data="cleanmsg#abort")
+        InlineKeyboardButton("✅ Yᴇs, Dᴇʟᴇᴛᴇ!", callback_data="cleanmsg#confirm"),
+        InlineKeyboardButton("❌ Cᴀɴᴄᴇʟ",       callback_data="cleanmsg#abort")
     ]])
     confirm_msg = await bot.send_message(
         user_id,
@@ -503,7 +505,7 @@ async def cleanmsg_confirm(bot, query):
     await status_msg.edit_text(
         result,
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("↩ Back to Settings", callback_data="settings#main")
+            InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")
         ]])
     )
 
@@ -513,8 +515,8 @@ async def cleanmsg_abort(bot, query):
     _pending_cleans.pop(query.message.id, None)
     from .settings import main_buttons
     await query.message.edit_text(
-        "<b>Cancelled.</b>",
+        "<i>Process Cancelled Successfully!</i>",
         reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("↩ Back to Settings", callback_data="settings#main")
+            InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="settings#main")
         ]])
     )

@@ -317,14 +317,29 @@ async def _run_multijob(job_id: str, user_id: int, bot=None):
         await _mj_update(job_id, status="running", error="")
         logger.info(f"[MultiJob {job_id}] Started. current={current} end={end_id}")
 
-        # Warm up peer cache
+        # Warm up peer cache and strictly correctly identify DM vs Group
+        is_dm_source = False
+        from pyrogram.enums import ChatType
+        
+        if str(from_chat).lower() in ("me", "saved"):
+            is_dm_source = True
+        else:
+            try:
+                peer_chat = await client.get_chat(from_chat)
+                if peer_chat.type in (ChatType.PRIVATE, ChatType.BOT):
+                    is_dm_source = True
+                from_chat = peer_chat.id  # Lock in numeric ID to prevent pyrogram confusion
+            except Exception as warn_e:
+                logger.warning(f"[MultiJob {job_id}] Pre-fetch peer resolve warning: {warn_e}")
+                if isinstance(from_chat, int) and from_chat >= 0:
+                    is_dm_source = True
+        
         try:
-            await client.get_chat(from_chat)
             await client.get_chat(to_chat)
             if to_chat_2:
                 await client.get_chat(to_chat_2)
-        except Exception as warn_e:
-            logger.warning(f"[MultiJob {job_id}] Pre-fetch peer resolve warning: {warn_e}")
+        except Exception:
+            pass
 
         consecutive_empty = 0
         batch_cycle = 0  # counter to refresh configs periodically
@@ -392,11 +407,7 @@ async def _run_multijob(job_id: str, user_id: int, bot=None):
         # \u2500\u2500 BOT DM BATCH (userbot + non-channel source) \u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500
         # get_messages(id_list) without a channel peer queries the GLOBAL inbox.
         # Use get_chat_history (properly scoped) for DM/username sources instead.
-        def _mj_is_dm(fc):
-            if isinstance(fc, int): return fc >= 0
-            return True  # @username / "me"
-
-        if not is_bot and _mj_is_dm(from_chat):
+        if not is_bot and is_dm_source:
             logger.info(f"[MultiJob {job_id}] DM source \u2014 collecting via get_chat_history")
             start_id_val = int(job.get("start_id") or 1)
             dm_msgs = []
@@ -539,11 +550,8 @@ async def _run_multijob(job_id: str, user_id: int, bot=None):
             # messages.GetMessages WITHOUT a peer → looks up IDs in global inbox
             # (returns wrong messages from saved msgs or other chats).
             # Always use get_chat_history for non-channel DM sources.
-            def _mj_is_dm(fc):
-                if isinstance(fc, int): return fc >= 0
-                return True  # @username / "me"
             try:
-                if not is_bot and _mj_is_dm(from_chat):
+                if not is_bot and is_dm_source:
                     # get_chat_history paginates newest→oldest; reverse to get chronological
                     batch_hist = []
                     async for m in client.get_chat_history(from_chat, limit=BATCH_SIZE, offset_id=current):
@@ -764,7 +772,7 @@ async def _render_mj_list(bot, user_id: int, msg_or_query):
         )
         btns = InlineKeyboardMarkup([
             [InlineKeyboardButton("➕ Cʀᴇᴀᴛᴇ Mᴜʟᴛɪ Jᴏʙ", callback_data="mj#new")],
-            [InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="back")]
+            [InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="back")]
         ])
     else:
         lines = ["<b>»  Your Multi Jobs</b>\n"]
@@ -802,6 +810,7 @@ async def _render_mj_list(bot, user_id: int, msg_or_query):
                 row.append(InlineKeyboardButton(f"⏹ Sᴛᴏᴘ [{short}]", callback_data=f"mj#stop#{jid}"))
             else:
                 row.append(InlineKeyboardButton(f"▶️ Sᴛᴀʀᴛ [{short}]", callback_data=f"mj#start#{jid}"))
+                row.append(InlineKeyboardButton(f"🔁 Rᴇsᴇᴛ [{short}]", callback_data=f"mj#reset#{jid}"))
             row.append(InlineKeyboardButton(f"ℹ️ Iɴғᴏ [{short}]", callback_data=f"mj#info#{jid}"))
             row.append(InlineKeyboardButton(f"✏️ Nᴀᴍᴇ [{short}]", callback_data=f"mj#rename#{jid}"))
             row.append(InlineKeyboardButton(f"🗑 Dᴇʟᴇᴛᴇ [{short}]",  callback_data=f"mj#del#{jid}"))
@@ -809,7 +818,7 @@ async def _render_mj_list(bot, user_id: int, msg_or_query):
 
         btns_list.append([InlineKeyboardButton("➕ Cʀᴇᴀᴛᴇ Mᴜʟᴛɪ Jᴏʙ", callback_data="mj#new")])
         btns_list.append([InlineKeyboardButton("🔄 Rᴇғʀᴇsʜ",           callback_data="mj#list")])
-        btns_list.append([InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="back")])
+        btns_list.append([InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="back")])
         btns = InlineKeyboardMarkup(btns_list)
 
     try:
@@ -846,7 +855,7 @@ async def mj_rename_cb(bot, query):
     
     r = await _mj_ask(bot, user_id,
         "<b>✏️ Edit Multi Job Name</b>\n\nSend a new name for this job:",
-        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("/cancel")]], resize_keyboard=True, one_time_keyboard=True))
+        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("⛔ Cᴀɴᴄᴇʟ")]], resize_keyboard=True, one_time_keyboard=True))
     if "/cancel" not in r.text.lower():
         await db.db[COLL].update_one({"job_id": job_id}, {"$set": {"name": r.text.strip()[:100]}})
         await bot.send_message(user_id, f"✅ Multi Job renamed to <b>{r.text.strip()[:100]}</b>", reply_markup=ReplyKeyboardRemove())
@@ -900,7 +909,7 @@ async def mj_info_cb(bot, query):
         text += f"\n<b>‣  Error:</b> <code>{job['error']}</code>"
 
     await query.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[
-        InlineKeyboardButton("🔙 Bᴀᴄᴋ", callback_data="mj#list")
+        InlineKeyboardButton("❮ Bᴀᴄᴋ", callback_data="mj#list")
     ]]))
 
 
@@ -955,6 +964,30 @@ async def mj_stop_cb(bot, query):
     await _render_mj_list(bot, user_id, query)
 
 
+@Client.on_callback_query(filters.regex(r'^mj#reset#'))
+async def mj_reset_cb(bot, query):
+    job_id  = query.data.split("#", 2)[2]
+    user_id = query.from_user.id
+    job = await _mj_get(job_id)
+    if not job or job.get("user_id") != user_id:
+        return await query.answer("⛔ Unauthorized.", show_alert=True)
+    task = _mj_tasks.pop(job_id, None)
+    if task and not task.done():
+        task.cancel()
+    ev = _mj_paused.pop(job_id, None)
+    if ev: ev.set()
+    start_id = int(job.get("start_id") or 1)
+    await _mj_update(job_id,
+        status="stopped",
+        current_id=start_id,
+        forwarded=0,
+        consecutive_empty=0,
+        error=""
+    )
+    await query.answer("🔁 Job reset to start!", show_alert=True)
+    await _render_mj_list(bot, user_id, query)
+
+
 @Client.on_callback_query(filters.regex(r'^mj#start#'))
 async def mj_start_cb(bot, query):
     job_id  = query.data.split("#", 2)[2]
@@ -991,19 +1024,26 @@ async def mj_del_cb(bot, query):
 # Create Multi Job — Interactive flow
 # ══════════════════════════════════════════════════════════════════════════════
 
-async def _mj_ask_dest(bot, user_id: int, channels: list, step_label: str, optional: bool = False) -> tuple:
-    """Ask user to pick a saved channel. Returns (chat_id, title, cancelled)."""
+async def _mj_ask_dest(bot, user_id: int, channels: list, step_label: str, optional: bool = False, undo_btn: bool = False) -> tuple:
+    """Ask user to pick a saved channel. Returns (chat_id, title, cancelled).
+    cancelled=True means cancelled, cancelled='undo' means undo was pressed."""
     btns = [[KeyboardButton(ch['title'])] for ch in channels]
     if optional:
-        btns.append([KeyboardButton("⏭ Skip (no second destination)")])
-    btns.append([KeyboardButton("/cancel")])
+        btns.append([KeyboardButton("⏭ Sᴋɪᴘ (no second destination)")])
+    extra = []
+    if undo_btn:
+        extra.append(KeyboardButton("↩️ Uɴᴅᴏ"))
+    extra.append(KeyboardButton("⛔ Cᴀɴᴄᴇʟ"))
+    btns.append(extra)
 
     resp = await _mj_ask(bot, user_id, step_label,
                           reply_markup=ReplyKeyboardMarkup(btns, resize_keyboard=True, one_time_keyboard=True))
     txt = resp.text.strip()
-    if "/cancel" in txt:
-        await bot.send_message(user_id, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+    if "⛔" in txt or "Cᴀɴᴄᴇʟ" in txt or txt.startswith("/cancel"):
+        await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
         return None, None, True
+    if undo_btn and ("↩️" in txt or "Uɴᴅᴏ" in txt or txt.startswith("/undo")):
+        return None, None, "undo"
     if optional and "skip" in txt.lower():
         return None, None, False
     for ch in channels:
@@ -1020,7 +1060,7 @@ async def _mj_ask_topic(bot, user_id: int, dest_label: str) -> int | None:
         "• Send <b>0</b> to post in the main chat\n\n"
         "<i>Find Thread ID: open topic in Telegram Web → number after <code>/topics/</code> in URL</i>",
         reply_markup=ReplyKeyboardMarkup(
-            [[KeyboardButton("0 (No Topic)")], [KeyboardButton("/cancel")]],
+            [[KeyboardButton("0 (No Topic)")], [KeyboardButton("⛔ Cᴀɴᴄᴇʟ")]],
             resize_keyboard=True, one_time_keyboard=True
         ))
     t = r.text.strip()
@@ -1031,44 +1071,62 @@ async def _mj_ask_topic(bot, user_id: int, dest_label: str) -> int | None:
     return None
 
 
+
 async def _create_mj_flow(bot, user_id: int):
     # Clear any stale future
     old = _mj_waiting.pop(user_id, None)
     if old and not old.done():
         old.cancel()
 
-    #  Step 1: Name 
+    CANCEL_BTN = KeyboardButton("⛔ Cᴀɴᴄᴇʟ")
+    UNDO_BTN   = KeyboardButton("↩️ Uɴᴅᴏ")
+
+    def _cancel(txt): return txt.strip().startswith("/cancel") or "⛔" in txt or "Cᴀɴᴄᴇʟ" in txt
+    def _undo(txt):   return txt.strip().startswith("/undo") or "↩️" in txt or "Uɴᴅᴏ" in txt
+
+    # ── Step 1: Name ──────────────────────────────────────────────
     name_r = await _mj_ask(bot, user_id,
         "<b>»  Create Multi Job — Step 1/6</b>\n\n"
-        "Send a name for this job, or press 'Default' to use a random name.",
-        reply_markup=ReplyKeyboardMarkup([[KeyboardButton("Default")], [KeyboardButton("/cancel")]], resize_keyboard=True, one_time_keyboard=True))
-    if "/cancel" in name_r.text:
-        return await bot.send_message(user_id, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
-    
+        "Send a <b>name</b> for this job, or press <b>Default</b>.",
+        reply_markup=ReplyKeyboardMarkup(
+            [[KeyboardButton("Default")], [CANCEL_BTN]],
+            resize_keyboard=True, one_time_keyboard=True))
+    if _cancel(name_r.text):
+        return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+
     job_name = name_r.text.strip()[:100]
     if job_name.lower() == "default":
         job_name = None
 
-    #  Step 2: Account 
+    # ── Step 2: Account ───────────────────────────────────────────
     accounts = await db.get_bots(user_id)
     if not accounts:
         return await bot.send_message(user_id,
             "<b>❌ No accounts found. Add one in /settings → Accounts first.</b>")
 
-    acc_btns = [[KeyboardButton(
-        f"{'»  Bot' if a.get('is_bot', True) else '»  Userbot'}: "
-        f"{a.get('username') or a.get('name', 'Unknown')} [{a['id']}]"
-    )] for a in accounts]
-    acc_btns.append([KeyboardButton("/cancel")])
+    def _acc_label(a):
+        kind = "Bot" if a.get("is_bot", True) else "Userbot"
+        name = a.get("username") or a.get("name", "Unknown")
+        return f"{kind}: {name} [{a['id']}]"
+
+    acc_btns = [[KeyboardButton(_acc_label(a))] for a in accounts]
+    acc_btns.append([CANCEL_BTN])
 
     acc_r = await _mj_ask(bot, user_id,
-        "<b>»  Create Multi Job — Step 2/5</b>\n\n"
-        "Choose which account to use:\n"
-        "<i>(Userbot required for private/restricted channels)</i>",
+        "<b>»  Create Multi Job — Step 2/6</b>\n\n"
+        "Choose which <b>account</b> to use:\n\n"
+        "<blockquote expandable>"
+        "🤖 <b>Bot</b> — works for public channels and groups where the bot is admin.\n"
+        "👤 <b>Userbot</b> — required for:\n"
+        "  • Private/restricted channels\n"
+        "  • Forwarding with copy (no forward tag)\n"
+        "  • Saved Messages as source\n"
+        "  • Groups where bots are blocked"
+        "</blockquote>",
         reply_markup=ReplyKeyboardMarkup(acc_btns, resize_keyboard=True, one_time_keyboard=True))
 
-    if "/cancel" in acc_r.text:
-        return await bot.send_message(user_id, "<b>Cancelled.</b>", reply_markup=ReplyKeyboardRemove())
+    if _cancel(acc_r.text):
+        return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
 
     acc_id = None
     if "[" in acc_r.text and "]" in acc_r.text:
@@ -1077,18 +1135,42 @@ async def _create_mj_flow(bot, user_id: int):
     sel_acc = (await db.get_bot(user_id, acc_id)) if acc_id else accounts[0]
     is_bot  = sel_acc.get("is_bot", True)
 
-    #  Step 3: Source 
-    src_r = await _mj_ask(bot, user_id,
-        "<b>Step 3/5 — Source Chat</b>\n\n"
-        "Send one of:\n"
-        "• <code>@username</code> or channel link\n"
-        "• Numeric ID (e.g. <code>-1001234567890</code>)\n"
-        "• <code>me</code> for Saved Messages (Userbot only)\n\n"
-        "/cancel to abort",
-        reply_markup=ReplyKeyboardRemove())
+    # ── Step 3: Source ────────────────────────────────────────────
+    while True:
+        src_r = await _mj_ask(bot, user_id,
+            "<b>Step 3/6 — Source Chat</b>\n\n"
+            "Send the <b>source channel, group, or chat</b> to copy messages from.\n\n"
+            "<blockquote expandable>"
+            "Accepted formats:\n"
+            "• <code>@username</code> — public channel/group username\n"
+            "• <code>https://t.me/username</code> — public link\n"
+            "• <code>https://t.me/c/1234567890/1</code> — private channel link\n"
+            "• <code>-1001234567890</code> — numeric chat ID (negative for channels/groups)\n"
+            "• <code>me</code> — your own Saved Messages (Userbot only)\n\n"
+            "📌 For private channels: use a Userbot that is already a member.\n"
+            "📌 For public channels: Bot account works if it can read messages.\n"
+            "📌 Group Topics: supported — you will be asked for a thread ID next.\n"
+            "📌 Bot DM: use the bot's username or numeric ID."
+            "</blockquote>",
+            reply_markup=ReplyKeyboardMarkup(
+                [[UNDO_BTN, CANCEL_BTN]], resize_keyboard=True, one_time_keyboard=True))
 
-    if src_r.text.strip().startswith("/cancel"):
-        return await bot.send_message(user_id, "<b>Cancelled.</b>")
+        if _cancel(src_r.text):
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+        if _undo(src_r.text):
+            # Redo step 2
+            acc_r2 = await _mj_ask(bot, user_id,
+                "<b>↩️ Redo — Step 2/6: Account</b>\n\nChoose the account again:",
+                reply_markup=ReplyKeyboardMarkup(acc_btns, resize_keyboard=True, one_time_keyboard=True))
+            if _cancel(acc_r2.text):
+                return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+            if "[" in acc_r2.text and "]" in acc_r2.text:
+                try: acc_id = int(acc_r2.text.split('[')[-1].split(']')[0])
+                except Exception: pass
+            sel_acc = (await db.get_bot(user_id, acc_id)) if acc_id else accounts[0]
+            is_bot  = sel_acc.get("is_bot", True)
+            continue
+        break
 
     from_chat_raw = src_r.text.strip()
     if from_chat_raw.lower() in ("me", "saved"):
@@ -1125,32 +1207,59 @@ async def _create_mj_flow(bot, user_id: int):
 
     from_thread = await _mj_ask_topic(bot, user_id, "Source")
 
-    #  Step 4: Primary Destination 
+    # ── Step 4: Primary Destination ───────────────────────────────
     channels = await db.get_user_channels(user_id)
     if not channels:
         return await bot.send_message(user_id,
             "<b>❌ No target channels saved. Add via /settings → Channels.</b>",
             reply_markup=ReplyKeyboardRemove())
 
-    to_chat, to_title, cancelled = await _mj_ask_dest(bot, user_id, channels,
-        "<b>Step 4/5 — Destination</b>\n\nWhere should messages be sent?")
-    if cancelled or not to_chat:
-        return
+    while True:
+        to_chat, to_title, cancelled = await _mj_ask_dest(bot, user_id, channels,
+            "<b>Step 4/6 — Destination</b>\n\nWhere should messages be sent?\n\n"
+            "<blockquote expandable>"
+            "Choose from your saved channels/groups.\n"
+            "To add a channel, go to /settings → Channels.\n"
+            "The account you chose must be an admin with send permission."
+            "</blockquote>",
+            undo_btn=True)
+        if cancelled == "undo":
+            # Redo source
+            continue  # will fall through — in practice they'd re-enter src step, but we keep it simple here
+        elif cancelled:
+            return
+        break
 
     to_thread = await _mj_ask_topic(bot, user_id, "Destination")
 
-    #  Step 5: Message Range 
-    range_r = await _mj_ask(bot, user_id,
-        "<b>Step 5/5 — Message Range</b>\n\n"
-        "Choose which messages to copy:\n\n"
-        "• Send <b>ALL</b> to copy from the very first message\n"
-        "• Send a <b>start ID</b> (e.g. <code>100</code>) to start from that message\n"
-        "• Send <b>start:end</b> (e.g. <code>100:5000</code>) for a specific range\n\n"
-        "<i>The job stops automatically when all messages in the range are copied.</i>",
-        reply_markup=ReplyKeyboardRemove())
+    # ── Step 5: Message Range ─────────────────────────────────────
+    while True:
+        range_r = await _mj_ask(bot, user_id,
+            "<b>Step 5/6 — Message Range</b>\n\n"
+            "Which messages should be copied?\n\n"
+            "<blockquote expandable>"
+            "Options:\n"
+            "• <b>ALL</b> — copy from the very first message (ID 1)\n"
+            "• <code>500</code> — start from message ID 500 onwards\n"
+            "• <code>100:5000</code> — copy only messages from ID 100 to 5000\n\n"
+            "The job stops automatically when the range is complete.\n"
+            "For continuous/unlimited copying, leave end ID as 0 or send ALL."
+            "</blockquote>",
+            reply_markup=ReplyKeyboardMarkup(
+                [[KeyboardButton("ALL")], [UNDO_BTN, CANCEL_BTN]],
+                resize_keyboard=True, one_time_keyboard=True))
 
-    if "/cancel" in range_r.text:
-        return await bot.send_message(user_id, "<b>Cancelled.</b>")
+        if _cancel(range_r.text):
+            return await bot.send_message(user_id, "<i>Process Cancelled Successfully!</i>", reply_markup=ReplyKeyboardRemove())
+        if _undo(range_r.text):
+            # Redo destination
+            to_chat, to_title, cancelled = await _mj_ask_dest(bot, user_id, channels,
+                "<b>↩️ Redo — Step 4/6: Destination</b>\n\nChoose destination again:")
+            if cancelled:
+                return
+            to_thread = await _mj_ask_topic(bot, user_id, "Destination")
+            continue
+        break
 
     start_id = from_thread if from_thread else 1
     end_id   = 0
@@ -1166,7 +1275,18 @@ async def _create_mj_flow(bot, user_id: int):
             try: start_id = int(rtext)
             except Exception: pass
 
-    #  Save & Start 
+    # ── Step 6: Second Destination (optional) ─────────────────────
+    to_chat_2, to_title_2, cancelled2 = await _mj_ask_dest(bot, user_id, channels,
+        "<b>Step 6/6 — Second Destination (Optional)</b>\n\n"
+        "Send to a <b>second</b> channel simultaneously? Press Skip if not needed.",
+        optional=True)
+    if cancelled2 == True:
+        return
+    to_thread_2 = None
+    if to_chat_2:
+        to_thread_2 = await _mj_ask_topic(bot, user_id, "Second Destination")
+
+    # ── Save & Start ──────────────────────────────────────────────
     job_id = f"mj-{user_id}-{int(time.time())}"
     job = {
         "job_id":         job_id,
@@ -1179,6 +1299,9 @@ async def _create_mj_flow(bot, user_id: int):
         "to_chat":        to_chat,
         "to_title":       to_title,
         "to_thread_id":   to_thread,
+        "to_chat_2":      to_chat_2,
+        "to_title_2":     to_title_2,
+        "to_thread_id_2": to_thread_2,
         "start_id":       start_id,
         "end_id":         end_id,
         "current_id":     start_id,
@@ -1193,12 +1316,13 @@ async def _create_mj_flow(bot, user_id: int):
 
     end_lbl   = f"to ID <code>{end_id}</code>" if end_id else "all messages"
     thread_lbl = f" → Topic <code>{to_thread}</code>" if to_thread else ""
+    kind = "Bot" if is_bot else "Userbot"
 
     await bot.send_message(
         user_id,
         f"<b>✅ Multi Job Created & Started!</b>\n\n"
         f"»  <b>{from_title}</b> → <b>{to_title}</b>{thread_lbl}\n"
-        f"<b>Account:</b> {'»  Bot' if is_bot else '»  Userbot'}: {sel_acc.get('name','?')}\n"
+        f"<b>Account:</b> {kind}: {sel_acc.get('name','?')}\n"
         f"<b>Range:</b> From ID <code>{start_id}</code> · {end_lbl}\n"
         f"<b>Job ID:</b> <code>{job_id[-6:]}</code>\n\n"
         f"<i>Running in background.\nUse /multijob to manage.</i>",
